@@ -655,6 +655,30 @@ func (h *Handler) DeleteProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to delete project views")
 		return
 	}
+	if err := qtx.DeleteYouTubeStudioByProject(r.Context(), db.DeleteYouTubeStudioByProjectParams{WorkspaceID: project.WorkspaceID, ProjectID: project.ID}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete studio outbox")
+		return
+	}
+	if err := qtx.DeleteYouTubeStudioArtifactsByProject(r.Context(), db.DeleteYouTubeStudioArtifactsByProjectParams{WorkspaceID: project.WorkspaceID, ProjectID: project.ID}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete studio versions")
+		return
+	}
+	if err := qtx.DeleteYouTubeStudioResultsByProject(r.Context(), db.DeleteYouTubeStudioResultsByProjectParams{WorkspaceID: project.WorkspaceID, ProjectID: project.ID}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete studio results")
+		return
+	}
+	if err := qtx.DeleteYouTubeStudioArtifactsProject(r.Context(), db.DeleteYouTubeStudioArtifactsProjectParams{WorkspaceID: project.WorkspaceID, ProjectID: project.ID}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete studio artifacts")
+		return
+	}
+	if err := qtx.DeleteYouTubeStudioBindingsByProject(r.Context(), db.DeleteYouTubeStudioBindingsByProjectParams{WorkspaceID: project.WorkspaceID, ProjectID: project.ID}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete studio bindings")
+		return
+	}
+	if err := qtx.DeleteYouTubeStudioProfileByProject(r.Context(), db.DeleteYouTubeStudioProfileByProjectParams{WorkspaceID: project.WorkspaceID, ProjectID: project.ID}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete studio profile")
+		return
+	}
 	if err := qtx.DeleteProject(r.Context(), db.DeleteProjectParams{
 		ID:          project.ID,
 		WorkspaceID: project.WorkspaceID,

@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX CONCURRENTLY youtube_video_project_workspace_project_idx ON youtube_video_project (workspace_id, project_id);

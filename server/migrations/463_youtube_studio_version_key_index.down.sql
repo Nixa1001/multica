@@ -1,0 +1,1 @@
+DROP INDEX CONCURRENTLY IF EXISTS youtube_artifact_version_artifact_number_idx;

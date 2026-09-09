@@ -1213,6 +1213,27 @@ func (h *Handler) DeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 			run:  func() error { return qtx.DeleteWorkspaceLeafData(ctx, requester.WorkspaceID) },
 		},
 		{
+			name: "delete youtube studio data",
+			run: func() error {
+				if err := qtx.DeleteYouTubeStudioWorkspace(ctx, requester.WorkspaceID); err != nil {
+					return err
+				}
+				if err := qtx.DeleteYouTubeStudioWorkspaceVersions(ctx, requester.WorkspaceID); err != nil {
+					return err
+				}
+				if err := qtx.DeleteYouTubeStudioWorkspaceResults(ctx, requester.WorkspaceID); err != nil {
+					return err
+				}
+				if err := qtx.DeleteYouTubeStudioWorkspaceArtifacts(ctx, requester.WorkspaceID); err != nil {
+					return err
+				}
+				if err := qtx.DeleteYouTubeStudioWorkspaceBindings(ctx, requester.WorkspaceID); err != nil {
+					return err
+				}
+				return qtx.DeleteYouTubeStudioWorkspaceProfiles(ctx, requester.WorkspaceID)
+			},
+		},
+		{
 			name: "delete autopilot runs",
 			run:  func() error { return qtx.DeleteWorkspaceAutopilotRuns(ctx, requester.WorkspaceID) },
 		},

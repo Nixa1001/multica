@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX CONCURRENTLY youtube_artifact_version_source_result_idx ON youtube_artifact_version (source_result_id);
