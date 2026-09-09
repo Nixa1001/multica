@@ -1566,3 +1566,76 @@ type WorkspaceShareLink struct {
 	IsActive    bool               `json:"is_active"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
+
+type YoutubeArtifact struct {
+	ID                   pgtype.UUID        `json:"id"`
+	WorkspaceID          pgtype.UUID        `json:"workspace_id"`
+	ProjectID            pgtype.UUID        `json:"project_id"`
+	ArtifactKey          string             `json:"artifact_key"`
+	CurrentVersionNumber int32              `json:"current_version_number"`
+	CreatedAt            pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
+}
+
+type YoutubeArtifactVersion struct {
+	ID             pgtype.UUID        `json:"id"`
+	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
+	ArtifactID     pgtype.UUID        `json:"artifact_id"`
+	VersionNumber  int32              `json:"version_number"`
+	SourceResultID pgtype.UUID        `json:"source_result_id"`
+	SourceIssueID  pgtype.UUID        `json:"source_issue_id"`
+	SourceTaskID   pgtype.UUID        `json:"source_task_id"`
+	Markdown       string             `json:"markdown"`
+	Sha256         string             `json:"sha256"`
+	RecordedAt     pgtype.Timestamptz `json:"recorded_at"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+}
+
+type YoutubeIssueBinding struct {
+	ID          pgtype.UUID        `json:"id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	ProjectID   pgtype.UUID        `json:"project_id"`
+	IssueID     pgtype.UUID        `json:"issue_id"`
+	ArtifactKey string             `json:"artifact_key"`
+	Kind        string             `json:"kind"`
+	Active      bool               `json:"active"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
+type YoutubeIssueResult struct {
+	ID            pgtype.UUID        `json:"id"`
+	EventID       pgtype.UUID        `json:"event_id"`
+	WorkspaceID   pgtype.UUID        `json:"workspace_id"`
+	ProjectID     pgtype.UUID        `json:"project_id"`
+	BindingID     pgtype.UUID        `json:"binding_id"`
+	ArtifactID    pgtype.UUID        `json:"artifact_id"`
+	SourceIssueID pgtype.UUID        `json:"source_issue_id"`
+	SourceTaskID  pgtype.UUID        `json:"source_task_id"`
+	Markdown      string             `json:"markdown"`
+	Sha256        string             `json:"sha256"`
+	RecordedAt    pgtype.Timestamptz `json:"recorded_at"`
+}
+
+type YoutubeStudioOutbox struct {
+	EventID        pgtype.UUID        `json:"event_id"`
+	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
+	ResultID       pgtype.UUID        `json:"result_id"`
+	EventKind      string             `json:"event_kind"`
+	Payload        []byte             `json:"payload"`
+	AttemptCount   int32              `json:"attempt_count"`
+	NextAttemptAt  pgtype.Timestamptz `json:"next_attempt_at"`
+	LeaseToken     pgtype.UUID        `json:"lease_token"`
+	LastError      pgtype.Text        `json:"last_error"`
+	DeadLetteredAt pgtype.Timestamptz `json:"dead_lettered_at"`
+	ConsumedAt     pgtype.Timestamptz `json:"consumed_at"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+}
+
+type YoutubeVideoProject struct {
+	ProjectID      pgtype.UUID        `json:"project_id"`
+	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
+	LifecycleState string             `json:"lifecycle_state"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+}

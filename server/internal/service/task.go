@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -4279,6 +4280,11 @@ func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, resu
 			}
 			chatAssistantMsg = msg
 		}
+		if t.IssueID.Valid {
+			if err := s.recordYouTubeMarkdownResult(ctx, qtx, t, result); err != nil {
+				return fmt.Errorf("record youtube studio result: %w", err)
+			}
+		}
 		return nil
 	}); err != nil {
 		// When parallel agents race, a task may already be completed,
@@ -4404,6 +4410,33 @@ func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, resu
 	s.broadcastTaskEvent(ctx, protocol.EventTaskCompleted, task)
 
 	return &task, nil
+}
+
+// recordYouTubeMarkdownResult is deliberately inside the terminal task
+// transaction. The SQL query is a no-op when the issue has no active Studio
+// binding, and re-checks workspace/project/parent invariants before writing.
+func (s *TaskService) recordYouTubeMarkdownResult(ctx context.Context, qtx *db.Queries, task db.AgentTaskQueue, result []byte) error {
+	var payload protocol.TaskCompletedPayload
+	if err := json.Unmarshal(result, &payload); err != nil || strings.TrimSpace(payload.Output) == "" {
+		return nil
+	}
+	markdown := redact.Text(util.UnescapeBackslashEscapes(payload.Output))
+	if strings.TrimSpace(markdown) == "" {
+		return nil
+	}
+	issue, err := qtx.GetIssue(ctx, task.IssueID)
+	if err != nil {
+		return err
+	}
+	digest := sha256.Sum256([]byte(markdown))
+	_, err = qtx.RecordYouTubeMarkdownResult(ctx, db.RecordYouTubeMarkdownResultParams{
+		SourceTaskID: task.ID, WorkspaceID: issue.WorkspaceID,
+		Markdown: markdown, Sha256: fmt.Sprintf("%x", digest),
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	return err
 }
 
 // chatNoResponseFallback is the non-empty English body stored on a no_response

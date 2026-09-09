@@ -42,6 +42,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/storage"
 	"github.com/multica-ai/multica/server/internal/util"
 	"github.com/multica-ai/multica/server/internal/util/secretbox"
+	"github.com/multica-ai/multica/server/internal/youtubestudio"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/featureflag"
 	"github.com/multica-ai/multica/server/pkg/llm"
@@ -211,6 +212,7 @@ type Handler struct {
 	SeatCapacity          seatcapacity.Executor
 	SeatCapacityLocker    seatcapacity.WorkspaceLocker
 	SeatCapacityWorker    *seatcapacity.Worker
+	YouTubeStudioWorker   *youtubestudio.Worker
 	EmailService          *service.EmailService
 	UpdateStore           UpdateStore
 	ModelListStore        ModelListStore

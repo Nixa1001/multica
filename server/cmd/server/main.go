@@ -735,6 +735,9 @@ func main() {
 	if h.SeatCapacityWorker != nil {
 		go h.SeatCapacityWorker.Run(sweepCtx)
 	}
+	if h.YouTubeStudioWorker != nil {
+		go h.YouTubeStudioWorker.Run(sweepCtx)
+	}
 	if h.TelegramOutbound != nil {
 		h.TelegramOutbound.Start(sweepCtx)
 	}

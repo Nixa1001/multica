@@ -1,0 +1,1 @@
+DROP INDEX CONCURRENTLY IF EXISTS youtube_artifact_workspace_project_key_idx;

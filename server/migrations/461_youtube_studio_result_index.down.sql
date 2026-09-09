@@ -1,0 +1,1 @@
+DROP INDEX CONCURRENTLY IF EXISTS youtube_issue_result_binding_task_idx;
