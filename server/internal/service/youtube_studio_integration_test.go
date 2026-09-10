@@ -370,6 +370,25 @@ func TestYouTubeStudioLeaseRetryAndDeadLetterStateMachine(t *testing.T) {
 	}
 }
 
+func TestYouTubeStudioProjectionDoesNotConsumeWithoutVersion(t *testing.T) {
+	pool := youtubeStudioPool(t)
+	ctx := context.Background()
+	f := youtubeFixtureSeed(t, ctx, pool)
+	eventID := youtubeMustUUID(t, pool, ctx, `INSERT INTO youtube_studio_outbox (event_id, workspace_id, result_id, event_kind, payload, next_attempt_at) VALUES (gen_random_uuid(), $1, gen_random_uuid(), 'IssueResultRecordedV1', '{}'::jsonb, now()) RETURNING event_id`, f.workspaceID)
+	worker := &youtubestudio.Worker{Queries: db.New(pool), TxStarter: pool, MaxAttempts: 3}
+	if err := worker.ReconcileOnce(ctx); err != nil {
+		t.Fatalf("reconcile missing projection: %v", err)
+	}
+	var consumed, leased bool
+	var attempts int
+	if err := pool.QueryRow(ctx, `SELECT consumed_at IS NOT NULL, lease_token IS NOT NULL, attempt_count FROM youtube_studio_outbox WHERE event_id = $1`, eventID).Scan(&consumed, &leased, &attempts); err != nil {
+		t.Fatal(err)
+	}
+	if consumed || leased || attempts != 1 {
+		t.Fatalf("missing projection state = consumed %t/leased %t/attempts %d, want false/false/1", consumed, leased, attempts)
+	}
+}
+
 func TestYouTubeStudioMigrationContract(t *testing.T) {
 	pool := youtubeStudioPool(t)
 	ctx := context.Background()
