@@ -23,6 +23,13 @@ SELECT id FROM project
 WHERE id = $1 AND workspace_id = $2
 FOR UPDATE;
 
+-- name: LockProjectForYouTubeStudioResult :one
+-- Serializes Studio result ingestion with project deletion. The completion
+-- transaction re-checks all issue/project relations after taking this lock.
+SELECT id FROM project
+WHERE id = $1 AND workspace_id = $2
+FOR KEY SHARE;
+
 -- name: CreateProject :one
 INSERT INTO project (
     workspace_id, title, description, icon, status,

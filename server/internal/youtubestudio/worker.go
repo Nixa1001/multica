@@ -32,13 +32,22 @@ func (w *Worker) Run(ctx context.Context) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
-		_ = w.ReconcileOnce(ctx)
+		if err := w.ReconcileOnce(ctx); err != nil && ctx.Err() == nil {
+			w.logger().ErrorContext(ctx, "youtube studio reconciliation failed", "error", err)
+		}
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
 		}
 	}
+}
+
+func (w *Worker) logger() *slog.Logger {
+	if w != nil && w.Logger != nil {
+		return w.Logger
+	}
+	return slog.Default()
 }
 func (w *Worker) ReconcileOnce(ctx context.Context) error {
 	if w == nil || w.Queries == nil || w.TxStarter == nil {
@@ -68,13 +77,15 @@ func (w *Worker) ReconcileOnce(ctx context.Context) error {
 		}
 		if err != nil {
 			if event.AttemptCount+1 >= max {
-				_ = w.Queries.MarkYouTubeStudioEventDeadLettered(ctx, db.MarkYouTubeStudioEventDeadLetteredParams{EventID: event.EventID, LeaseToken: event.LeaseToken, LastError: err.Error()})
+				if stateErr := w.Queries.MarkYouTubeStudioEventDeadLettered(ctx, db.MarkYouTubeStudioEventDeadLetteredParams{EventID: event.EventID, LeaseToken: event.LeaseToken, LastError: err.Error()}); stateErr != nil {
+					w.logger().ErrorContext(ctx, "youtube studio dead-letter state update failed", "event_id", event.EventID, "error", stateErr, "projection_error", err)
+				}
 			} else {
-				_ = w.Queries.MarkYouTubeStudioEventFailed(ctx, db.MarkYouTubeStudioEventFailedParams{EventID: event.EventID, LeaseToken: event.LeaseToken, LastError: err.Error(), NextAttemptAt: pgtype.Timestamptz{Time: time.Now().Add(time.Minute), Valid: true}})
+				if stateErr := w.Queries.MarkYouTubeStudioEventFailed(ctx, db.MarkYouTubeStudioEventFailedParams{EventID: event.EventID, LeaseToken: event.LeaseToken, LastError: err.Error(), NextAttemptAt: pgtype.Timestamptz{Time: time.Now().Add(time.Minute), Valid: true}}); stateErr != nil {
+					w.logger().ErrorContext(ctx, "youtube studio retry state update failed", "event_id", event.EventID, "error", stateErr, "projection_error", err)
+				}
 			}
-			if w.Logger != nil {
-				w.Logger.WarnContext(ctx, "youtube studio event projection failed", "error", err)
-			}
+			w.logger().WarnContext(ctx, "youtube studio event projection failed", "event_id", event.EventID, "error", err)
 		}
 	}
 	return nil

@@ -449,6 +449,42 @@ func TestYouTubeStudioConcurrentVersionsAreMonotoneAndImmutable(t *testing.T) {
 	if immutable != 0 {
 		t.Fatalf("found %d invalid/non-monotone versions", immutable)
 	}
+	rows, err := pool.Query(ctx, `
+		SELECT v.version_number, v.markdown, v.sha256,
+		       v.source_issue_id::text, v.source_task_id::text,
+		       r.markdown, r.sha256,
+		       r.source_issue_id::text, r.source_task_id::text
+		FROM youtube_artifact_version v
+		JOIN youtube_issue_result r ON r.id = v.source_result_id
+		JOIN youtube_artifact a ON a.id = v.artifact_id
+		WHERE a.workspace_id = $1 AND a.project_id = $2
+		ORDER BY v.version_number`, f.workspaceID, f.projectID)
+	if err != nil {
+		t.Fatalf("query immutable Studio provenance: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var version int
+		var versionMarkdown, versionHash, versionIssue, versionTask string
+		var resultMarkdown, resultHash, resultIssue, resultTask string
+		if err := rows.Scan(&version, &versionMarkdown, &versionHash, &versionIssue, &versionTask,
+			&resultMarkdown, &resultHash, &resultIssue, &resultTask); err != nil {
+			t.Fatalf("scan immutable Studio provenance: %v", err)
+		}
+		if versionMarkdown != resultMarkdown || versionHash != resultHash ||
+			versionIssue != resultIssue || versionTask != resultTask {
+			t.Fatalf("version %d changed immutable provenance: version=%q/%q/%q/%q result=%q/%q/%q/%q",
+				version, versionMarkdown, versionHash, versionIssue, versionTask,
+				resultMarkdown, resultHash, resultIssue, resultTask)
+		}
+		digest := sha256.Sum256([]byte(versionMarkdown))
+		if versionHash != hex.EncodeToString(digest[:]) {
+			t.Fatalf("version %d has hash %q for content %q", version, versionHash, versionMarkdown)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate immutable Studio provenance: %v", err)
+	}
 }
 
 func TestYouTubeStudioRejectsOutOfScopeResultsAndCleansPendingOutbox(t *testing.T) {

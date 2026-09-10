@@ -253,6 +253,25 @@ func (q *Queries) LockProjectForDelete(ctx context.Context, arg LockProjectForDe
 	return id, err
 }
 
+const lockProjectForYouTubeStudioResult = `-- name: LockProjectForYouTubeStudioResult :one
+SELECT id FROM project
+WHERE id = $1 AND workspace_id = $2
+FOR KEY SHARE
+`
+
+type LockProjectForYouTubeStudioResultParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+// Serializes YouTube Studio result ingestion with project deletion.
+func (q *Queries) LockProjectForYouTubeStudioResult(ctx context.Context, arg LockProjectForYouTubeStudioResultParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, lockProjectForYouTubeStudioResult, arg.ID, arg.WorkspaceID)
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
 const updateProject = `-- name: UpdateProject :one
 UPDATE project SET
     title = COALESCE($2, title),
