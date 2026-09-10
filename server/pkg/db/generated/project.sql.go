@@ -264,7 +264,8 @@ type LockProjectForYouTubeStudioResultParams struct {
 	WorkspaceID pgtype.UUID `json:"workspace_id"`
 }
 
-// Serializes YouTube Studio result ingestion with project deletion.
+// Serializes Studio result ingestion with project deletion. The completion
+// transaction re-checks all issue/project relations after taking this lock.
 func (q *Queries) LockProjectForYouTubeStudioResult(ctx context.Context, arg LockProjectForYouTubeStudioResultParams) (pgtype.UUID, error) {
 	row := q.db.QueryRow(ctx, lockProjectForYouTubeStudioResult, arg.ID, arg.WorkspaceID)
 	var id pgtype.UUID

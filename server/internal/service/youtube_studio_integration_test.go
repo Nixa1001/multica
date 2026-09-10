@@ -225,6 +225,36 @@ func TestYouTubeStudioClaimCrashReplaysAfterLeaseExpiry(t *testing.T) {
 	if !consumed || youtubeCount(t, pool, ctx, `SELECT count(*) FROM youtube_artifact_version WHERE source_task_id = $1`, taskID) != 1 {
 		t.Fatalf("replay state = consumed %t/versions %d, want true/1", consumed, youtubeCount(t, pool, ctx, `SELECT count(*) FROM youtube_artifact_version WHERE source_task_id = $1`, taskID))
 	}
+	var beforeMarkdown, beforeHash, beforeIssue, beforeTask string
+	if err := pool.QueryRow(ctx, `
+		SELECT markdown, sha256, source_issue_id::text, source_task_id::text
+		FROM youtube_artifact_version WHERE source_task_id = $1`, taskID).
+		Scan(&beforeMarkdown, &beforeHash, &beforeIssue, &beforeTask); err != nil {
+		t.Fatalf("capture replay provenance: %v", err)
+	}
+	// Requeue the same event after corrupting its source row with conflicting
+	// content and provenance. The source_result_id uniqueness contract must
+	// make projection idempotent and preserve the first version byte-for-byte.
+	conflictingIssue := youtubeMustUUID(t, pool, ctx, `INSERT INTO issue (workspace_id, project_id, title, status, creator_type, creator_id, number) VALUES ($1, $2, 'conflicting replay', 'in_progress', 'member', $3, $4) RETURNING id`, f.workspaceID, f.projectID, f.userID, 500000001)
+	if _, err := pool.Exec(ctx, `UPDATE youtube_issue_result SET markdown = 'conflicting replay', sha256 = repeat('f', 64), source_issue_id = $1, source_task_id = gen_random_uuid() WHERE id = $2`, conflictingIssue, resultID); err != nil {
+		t.Fatalf("mutate conflicting replay source: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE youtube_studio_outbox SET consumed_at = NULL, lease_token = NULL, next_attempt_at = now() - interval '1 second' WHERE event_id = $1`, claimed); err != nil {
+		t.Fatalf("requeue conflicting replay: %v", err)
+	}
+	if err := worker.ReconcileOnce(ctx); err != nil {
+		t.Fatalf("conflicting replay: %v", err)
+	}
+	var afterMarkdown, afterHash, afterIssue, afterTask string
+	if err := pool.QueryRow(ctx, `
+		SELECT markdown, sha256, source_issue_id::text, source_task_id::text
+		FROM youtube_artifact_version WHERE source_result_id = $1`, resultID).
+		Scan(&afterMarkdown, &afterHash, &afterIssue, &afterTask); err != nil {
+		t.Fatalf("load conflicting replay provenance: %v", err)
+	}
+	if beforeMarkdown != afterMarkdown || beforeHash != afterHash || beforeIssue != afterIssue || beforeTask != afterTask {
+		t.Fatalf("conflicting replay mutated immutable version: before=%q/%q/%q/%q after=%q/%q/%q/%q", beforeMarkdown, beforeHash, beforeIssue, beforeTask, afterMarkdown, afterHash, afterIssue, afterTask)
+	}
 }
 
 func TestYouTubeStudioRejectsRelationDriftAndAmbiguousBindings(t *testing.T) {

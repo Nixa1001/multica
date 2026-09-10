@@ -13,8 +13,15 @@ import (
 type TxStarter interface {
 	Begin(context.Context) (pgx.Tx, error)
 }
+
+type workerQueries interface {
+	ClaimYouTubeStudioEvent(context.Context, pgtype.Timestamptz) (db.YoutubeStudioOutbox, error)
+	WithTx(pgx.Tx) *db.Queries
+	MarkYouTubeStudioEventFailed(context.Context, db.MarkYouTubeStudioEventFailedParams) error
+	MarkYouTubeStudioEventDeadLettered(context.Context, db.MarkYouTubeStudioEventDeadLetteredParams) error
+}
 type Worker struct {
-	Queries     *db.Queries
+	Queries     workerQueries
 	TxStarter   TxStarter
 	Interval    time.Duration
 	MaxAttempts int32
