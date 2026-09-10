@@ -59,7 +59,7 @@ func (w *Worker) ReconcileOnce(ctx context.Context) error {
 		tx, err := w.TxStarter.Begin(ctx)
 		if err == nil {
 			q := w.Queries.WithTx(tx)
-			err = q.ProjectYouTubeStudioEvent(ctx, db.ProjectYouTubeStudioEventParams{EventID: event.EventID, LeaseToken: event.LeaseToken})
+			_, err = q.ProjectYouTubeStudioEvent(ctx, db.ProjectYouTubeStudioEventParams{EventID: event.EventID, LeaseToken: event.LeaseToken})
 			if err == nil {
 				err = tx.Commit(ctx)
 			} else {

@@ -119,6 +119,31 @@ func youtubeBind(t *testing.T, ctx context.Context, pool *pgxpool.Pool, q *db.Qu
 	}
 }
 
+func TestYouTubeStudioBootstrapCreatesCleanProfileArtifactAndBinding(t *testing.T) {
+	pool := youtubeStudioPool(t)
+	ctx := context.Background()
+	f := youtubeFixtureSeed(t, ctx, pool)
+	q := db.New(pool)
+	if err := q.BootstrapYouTubeMarkdownBinding(ctx, db.BootstrapYouTubeMarkdownBindingParams{
+		WorkspaceID: f.workspaceID, ProjectID: f.projectID, ArtifactKey: "brief", ID: f.issueID,
+	}); err != nil {
+		t.Fatalf("clean bootstrap: %v", err)
+	}
+	var profiles, artifacts, bindings int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM youtube_video_project WHERE workspace_id = $1 AND project_id = $2`, f.workspaceID, f.projectID).Scan(&profiles); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM youtube_artifact WHERE workspace_id = $1 AND project_id = $2 AND artifact_key = 'brief'`, f.workspaceID, f.projectID).Scan(&artifacts); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM youtube_issue_binding WHERE workspace_id = $1 AND project_id = $2 AND issue_id = $3`, f.workspaceID, f.projectID, f.issueID).Scan(&bindings); err != nil {
+		t.Fatal(err)
+	}
+	if profiles != 1 || artifacts != 1 || bindings != 1 {
+		t.Fatalf("clean bootstrap counts = profile %d/artifact %d/binding %d, want 1/1/1", profiles, artifacts, bindings)
+	}
+}
+
 func youtubeTask(t *testing.T, ctx context.Context, pool *pgxpool.Pool, f youtubeFixture, issueID pgtype.UUID) pgtype.UUID {
 	t.Helper()
 	return youtubeMustUUID(t, pool, ctx, `INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, started_at) VALUES ($1, $2, $3, 'running', now()) RETURNING id`, f.agentID, f.runtimeID, issueID)

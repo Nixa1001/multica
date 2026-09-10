@@ -46,7 +46,7 @@ WITH candidate AS (
 )
 SELECT * FROM result;
 
--- name: ProjectYouTubeStudioEvent :exec
+-- name: ProjectYouTubeStudioEvent :one
 WITH source AS (
     SELECT o.result_id, r.artifact_id, r.workspace_id, r.source_issue_id,
            r.source_task_id, r.markdown, r.sha256, r.recorded_at,
@@ -75,10 +75,21 @@ WITH source AS (
     UPDATE youtube_artifact a SET current_version_number = inserted.version_number,
         updated_at = now()
     FROM inserted WHERE a.id = inserted.artifact_id
+    RETURNING a.id AS artifact_id, inserted.version_number
+), existing AS (
+    SELECT v.artifact_id, v.version_number
+    FROM source
+    JOIN youtube_artifact_version v ON v.source_result_id = source.result_id
+), projected AS (
+    SELECT artifact_id, version_number FROM bumped
+    UNION ALL
+    SELECT artifact_id, version_number FROM existing
 )
 UPDATE youtube_studio_outbox o SET consumed_at = now(), lease_token = NULL,
     attempt_count = attempt_count + 1, last_error = NULL, updated_at = now()
-WHERE o.event_id = sqlc.arg('event_id') AND o.lease_token = sqlc.arg('lease_token');
+FROM projected
+WHERE o.event_id = sqlc.arg('event_id') AND o.lease_token = sqlc.arg('lease_token')
+RETURNING o.event_id;
 
 -- name: ClaimYouTubeStudioEvent :one
 WITH due AS (
@@ -153,8 +164,9 @@ WITH profile AS (
     ON CONFLICT (project_id) DO NOTHING
 ), artifact AS (
     INSERT INTO youtube_artifact (workspace_id, project_id, artifact_key)
-    SELECT $1, $2, $3
-    WHERE EXISTS (SELECT 1 FROM youtube_video_project v WHERE v.workspace_id = $1 AND v.project_id = $2)
+    SELECT p.workspace_id, p.id, $3
+    FROM project p
+    WHERE p.id = $2 AND p.workspace_id = $1
     ON CONFLICT (workspace_id, project_id, artifact_key) DO NOTHING
 )
 INSERT INTO youtube_issue_binding (workspace_id, project_id, issue_id, artifact_key, kind)
@@ -165,5 +177,5 @@ WHERE i.id = $4 AND i.workspace_id = $1 AND i.project_id = $2
       SELECT 1 FROM issue parent WHERE parent.id = i.parent_issue_id
         AND parent.workspace_id = i.workspace_id AND parent.project_id = i.project_id
   ))
-  AND EXISTS (SELECT 1 FROM youtube_artifact a WHERE a.workspace_id = $1 AND a.project_id = $2 AND a.artifact_key = $3)
+  AND EXISTS (SELECT 1 FROM project p WHERE p.id = $2 AND p.workspace_id = $1)
 ON CONFLICT (workspace_id, issue_id) WHERE active DO NOTHING;
