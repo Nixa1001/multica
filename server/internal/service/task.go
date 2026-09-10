@@ -4431,6 +4431,7 @@ func (s *TaskService) recordYouTubeMarkdownResult(ctx context.Context, qtx *db.Q
 	// Project deletion takes this row FOR UPDATE before sweeping Studio rows.
 	// Taking the compatible FOR KEY SHARE lock here makes the completion and
 	// delete transactions serialize before either can commit a partial view.
+	NotifyYouTubeStudioProjectLockBefore(ctx)
 	if _, err := qtx.LockProjectForYouTubeStudioResult(ctx, db.LockProjectForYouTubeStudioResultParams{
 		ID:          issue.ProjectID,
 		WorkspaceID: issue.WorkspaceID,
@@ -4440,6 +4441,7 @@ func (s *TaskService) recordYouTubeMarkdownResult(ctx context.Context, qtx *db.Q
 		}
 		return err
 	}
+	NotifyYouTubeStudioProjectLockAcquired(ctx)
 	digest := sha256.Sum256([]byte(markdown))
 	_, err = qtx.RecordYouTubeMarkdownResult(ctx, db.RecordYouTubeMarkdownResultParams{
 		SourceTaskID: task.ID, WorkspaceID: issue.WorkspaceID,

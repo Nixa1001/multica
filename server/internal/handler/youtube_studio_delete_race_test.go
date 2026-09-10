@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/multica-ai/multica/server/internal/service"
 )
 
 type youtubeDeleteRaceFixture struct {
@@ -102,33 +105,43 @@ func runYouTubeDeleteRace(t *testing.T, f youtubeDeleteRaceFixture, deletionFirs
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	completionResult, _ := json.Marshal(map[string]string{"output": "race markdown"})
-	var blockerTx interface {
-		Commit(context.Context) error
-		Rollback(context.Context) error
-	}
-	tx, err := testPool.Begin(ctx)
-	if err != nil {
-		t.Fatalf("begin lock-order fixture: %v", err)
-	}
-	blockerTx = tx
-	lockMode := "FOR KEY SHARE"
-	if deletionFirst {
-		lockMode = "FOR UPDATE"
-	}
-	if _, err := tx.Exec(ctx, `SELECT id FROM project WHERE id = $1 `+lockMode, f.projectID); err != nil {
-		_ = tx.Rollback(ctx)
-		t.Fatalf("hold %s project lock: %v", lockMode, err)
-	}
-
 	var wg sync.WaitGroup
 	errs := make(chan error, 2)
+	completionBefore := make(chan struct{})
+	completionAcquired := make(chan struct{})
+	deleteBefore := make(chan struct{})
+	deleteAcquired := make(chan struct{})
 	startDelete := make(chan struct{})
+	releaseCompletion := make(chan struct{})
+	releaseDelete := make(chan struct{})
+	completionObserver := &service.YouTubeStudioProjectLockObserver{
+		Before: func() { close(completionBefore) },
+		Acquired: func() {
+			close(completionAcquired)
+			select {
+			case <-releaseCompletion:
+			case <-ctx.Done():
+			}
+		},
+	}
+	deleteObserver := &service.YouTubeStudioProjectLockObserver{
+		Before: func() { close(deleteBefore) },
+		Acquired: func() {
+			close(deleteAcquired)
+			select {
+			case <-releaseDelete:
+			case <-ctx.Done():
+			}
+		},
+	}
+	completionCtx := service.WithYouTubeStudioProjectLockObserver(ctx, completionObserver)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		<-startDelete
 		w := httptest.NewRecorder()
 		req := withURLParam(newRequest(http.MethodDelete, "/api/projects/"+f.projectID.String(), nil), "id", f.projectID.String())
+		req = req.WithContext(service.WithYouTubeStudioProjectLockObserver(req.Context(), deleteObserver))
 		testHandler.DeleteProject(w, req)
 		if w.Code != http.StatusNoContent {
 			errs <- &httpError{code: w.Code, body: w.Body.String()}
@@ -137,17 +150,25 @@ func runYouTubeDeleteRace(t *testing.T, f youtubeDeleteRaceFixture, deletionFirs
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		if deletionFirst {
-			<-startDelete
-		}
-		_, err := testHandler.TaskService.CompleteTask(ctx, f.taskID, completionResult, "", "", "", false, "", "")
+		_, err := testHandler.TaskService.CompleteTask(completionCtx, f.taskID, completionResult, "", "", "", false, "", "")
 		if err != nil {
 			errs <- err
 		}
 	}()
-	close(startDelete)
-	if err := blockerTx.Rollback(ctx); err != nil {
-		t.Fatalf("release project lock: %v", err)
+	if deletionFirst {
+		close(startDelete)
+		waitForChannel(t, deleteAcquired, "DeleteProject acquired FOR UPDATE")
+		waitForChannel(t, completionBefore, "CompleteTask reached FOR KEY SHARE")
+		waitForPostgresLockWait(t, ctx, "FOR KEY SHARE")
+		assertChannelNotReady(t, completionAcquired, "CompleteTask acquired FOR KEY SHARE before DeleteProject released FOR UPDATE")
+		close(releaseDelete)
+	} else {
+		waitForChannel(t, completionAcquired, "CompleteTask acquired FOR KEY SHARE")
+		close(startDelete)
+		waitForChannel(t, deleteBefore, "DeleteProject reached FOR UPDATE")
+		waitForPostgresLockWait(t, ctx, "FOR UPDATE")
+		assertChannelNotReady(t, deleteAcquired, "DeleteProject acquired FOR UPDATE before CompleteTask released FOR KEY SHARE")
+		close(releaseCompletion)
 	}
 	wg.Wait()
 	close(errs)
@@ -155,6 +176,56 @@ func runYouTubeDeleteRace(t *testing.T, f youtubeDeleteRaceFixture, deletionFirs
 		t.Fatalf("concurrent %s ordering: %v", map[bool]string{true: "deletion-first", false: "completion-first"}[deletionFirst], err)
 	}
 	assertNoYouTubeStudioProjectRows(t, f)
+}
+
+func waitForChannel(t *testing.T, ch <-chan struct{}, description string) {
+	t.Helper()
+	timer := time.NewTimer(2 * time.Second)
+	defer timer.Stop()
+	select {
+	case <-ch:
+	case <-timer.C:
+		t.Fatalf("timed out waiting for %s", description)
+	}
+}
+
+func assertChannelNotReady(t *testing.T, ch <-chan struct{}, message string) {
+	t.Helper()
+	select {
+	case <-ch:
+		t.Fatal(message)
+	default:
+	}
+}
+
+func waitForPostgresLockWait(t *testing.T, ctx context.Context, lockClause string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	pattern := "%" + lockClause + "%"
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		dsn = "postgres://multica:multica@localhost:5432/multica?sslmode=disable"
+	}
+	observerPool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("open PostgreSQL lock observer: %v", err)
+	}
+	defer observerPool.Close()
+	for time.Now().Before(deadline) {
+		var waiting int
+		if err := observerPool.QueryRow(ctx, `
+			SELECT count(*) FROM pg_stat_activity
+			WHERE wait_event_type = 'Lock' AND state = 'active' AND query LIKE $1`, pattern).Scan(&waiting); err != nil {
+			t.Fatalf("observe PostgreSQL %s wait: %v", lockClause, err)
+		}
+		if waiting > 0 {
+			return
+		}
+		<-ticker.C
+	}
+	t.Fatalf("did not observe PostgreSQL session blocked on %s", lockClause)
 }
 
 type httpError struct {
