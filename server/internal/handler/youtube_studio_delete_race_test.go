@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -114,9 +115,15 @@ func runYouTubeDeleteRace(t *testing.T, f youtubeDeleteRaceFixture, deletionFirs
 	startDelete := make(chan struct{})
 	releaseCompletion := make(chan struct{})
 	releaseDelete := make(chan struct{})
+	type lockEvent struct{ pid int32 }
+	completionBeforeEvent := make(chan lockEvent, 1)
+	completionAcquiredEvent := make(chan lockEvent, 1)
+	deleteBeforeEvent := make(chan lockEvent, 1)
+	deleteAcquiredEvent := make(chan lockEvent, 1)
 	completionObserver := &service.YouTubeStudioProjectLockObserver{
-		Before: func() { close(completionBefore) },
-		Acquired: func() {
+		Before: func(pid int32) { completionBeforeEvent <- lockEvent{pid: pid}; close(completionBefore) },
+		Acquired: func(pid int32) {
+			completionAcquiredEvent <- lockEvent{pid: pid}
 			close(completionAcquired)
 			select {
 			case <-releaseCompletion:
@@ -125,8 +132,9 @@ func runYouTubeDeleteRace(t *testing.T, f youtubeDeleteRaceFixture, deletionFirs
 		},
 	}
 	deleteObserver := &service.YouTubeStudioProjectLockObserver{
-		Before: func() { close(deleteBefore) },
-		Acquired: func() {
+		Before: func(pid int32) { deleteBeforeEvent <- lockEvent{pid: pid}; close(deleteBefore) },
+		Acquired: func(pid int32) {
+			deleteAcquiredEvent <- lockEvent{pid: pid}
 			close(deleteAcquired)
 			select {
 			case <-releaseDelete:
@@ -159,16 +167,27 @@ func runYouTubeDeleteRace(t *testing.T, f youtubeDeleteRaceFixture, deletionFirs
 		close(startDelete)
 		waitForChannel(t, deleteAcquired, "DeleteProject acquired FOR UPDATE")
 		waitForChannel(t, completionBefore, "CompleteTask reached FOR KEY SHARE")
-		waitForPostgresLockWait(t, ctx, "FOR KEY SHARE")
+		deleteLock := <-deleteAcquiredEvent
+		completionLock := <-completionBeforeEvent
+		waitForPostgresLockWait(t, ctx, completionLock.pid, deleteLock.pid, "FOR KEY SHARE", time.Second)
+		if err := waitForPostgresLockWaitError(ctx, 2147483647, deleteLock.pid, "FOR KEY SHARE", 75*time.Millisecond); err == nil {
+			t.Fatal("unrelated PostgreSQL session incorrectly satisfied the FOR KEY SHARE lock-wait probe")
+		}
 		assertChannelNotReady(t, completionAcquired, "CompleteTask acquired FOR KEY SHARE before DeleteProject released FOR UPDATE")
 		close(releaseDelete)
 	} else {
 		waitForChannel(t, completionAcquired, "CompleteTask acquired FOR KEY SHARE")
 		close(startDelete)
 		waitForChannel(t, deleteBefore, "DeleteProject reached FOR UPDATE")
-		waitForPostgresLockWait(t, ctx, "FOR UPDATE")
+		completionLock := <-completionAcquiredEvent
+		deleteLock := <-deleteBeforeEvent
+		waitForPostgresLockWait(t, ctx, deleteLock.pid, completionLock.pid, "FOR UPDATE", time.Second)
+		if err := waitForPostgresLockWaitError(ctx, 2147483647, completionLock.pid, "FOR UPDATE", 75*time.Millisecond); err == nil {
+			t.Fatal("unrelated PostgreSQL session incorrectly satisfied the FOR UPDATE lock-wait probe")
+		}
 		assertChannelNotReady(t, deleteAcquired, "DeleteProject acquired FOR UPDATE before CompleteTask released FOR KEY SHARE")
 		close(releaseCompletion)
+		close(releaseDelete)
 	}
 	wg.Wait()
 	close(errs)
@@ -198,9 +217,15 @@ func assertChannelNotReady(t *testing.T, ch <-chan struct{}, message string) {
 	}
 }
 
-func waitForPostgresLockWait(t *testing.T, ctx context.Context, lockClause string) {
+func waitForPostgresLockWait(t *testing.T, ctx context.Context, waiterPID, blockerPID int32, lockClause string, timeout time.Duration) {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
+	if err := waitForPostgresLockWaitError(ctx, waiterPID, blockerPID, lockClause, timeout); err != nil {
+		t.Fatalf("%v", err)
+	}
+}
+
+func waitForPostgresLockWaitError(ctx context.Context, waiterPID, blockerPID int32, lockClause string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
 	pattern := "%" + lockClause + "%"
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
@@ -210,22 +235,23 @@ func waitForPostgresLockWait(t *testing.T, ctx context.Context, lockClause strin
 	}
 	observerPool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
-		t.Fatalf("open PostgreSQL lock observer: %v", err)
+		return fmt.Errorf("open PostgreSQL lock observer: %w", err)
 	}
 	defer observerPool.Close()
 	for time.Now().Before(deadline) {
 		var waiting int
 		if err := observerPool.QueryRow(ctx, `
 			SELECT count(*) FROM pg_stat_activity
-			WHERE wait_event_type = 'Lock' AND state = 'active' AND query LIKE $1`, pattern).Scan(&waiting); err != nil {
-			t.Fatalf("observe PostgreSQL %s wait: %v", lockClause, err)
+			WHERE pid = $1 AND wait_event_type = 'Lock' AND state = 'active'
+			  AND query LIKE $2 AND $3 = ANY(pg_blocking_pids(pid))`, waiterPID, pattern, blockerPID).Scan(&waiting); err != nil {
+			return fmt.Errorf("observe PostgreSQL %s wait for pid %d blocked by %d: %w", lockClause, waiterPID, blockerPID, err)
 		}
 		if waiting > 0 {
-			return
+			return nil
 		}
 		<-ticker.C
 	}
-	t.Fatalf("did not observe PostgreSQL session blocked on %s", lockClause)
+	return fmt.Errorf("did not observe PostgreSQL pid %d blocked by pid %d on %s", waiterPID, blockerPID, lockClause)
 }
 
 type httpError struct {

@@ -184,3 +184,5 @@ WHERE i.id = $4 AND i.workspace_id = $1 AND i.project_id = $2
   ))
   AND EXISTS (SELECT 1 FROM project p WHERE p.id = $2 AND p.workspace_id = $1)
 ON CONFLICT (workspace_id, issue_id) WHERE active DO NOTHING;
+-- name: GetYouTubeStudioBackendPID :one
+SELECT pg_backend_pid();

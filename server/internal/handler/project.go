@@ -629,7 +629,15 @@ func (h *Handler) DeleteProject(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback(r.Context())
 	qtx := h.Queries.WithTx(tx)
 
-	service.NotifyYouTubeStudioProjectLockBefore(r.Context())
+	var lockPID int32
+	if service.YouTubeStudioProjectLockObserverEnabled(r.Context()) {
+		lockPID, err = qtx.GetYouTubeStudioBackendPID(r.Context())
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to identify project lock session")
+			return
+		}
+	}
+	service.NotifyYouTubeStudioProjectLockBefore(r.Context(), lockPID)
 	if _, err := qtx.LockProjectForDelete(r.Context(), db.LockProjectForDeleteParams{
 		ID:          project.ID,
 		WorkspaceID: project.WorkspaceID,
@@ -641,7 +649,7 @@ func (h *Handler) DeleteProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to lock project")
 		return
 	}
-	service.NotifyYouTubeStudioProjectLockAcquired(r.Context())
+	service.NotifyYouTubeStudioProjectLockAcquired(r.Context(), lockPID)
 	if err := qtx.ClearChatSessionProjectByProject(r.Context(), db.ClearChatSessionProjectByProjectParams{
 		ProjectID:   project.ID,
 		WorkspaceID: project.WorkspaceID,

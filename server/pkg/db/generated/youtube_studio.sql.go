@@ -225,6 +225,17 @@ func (q *Queries) DeleteYouTubeStudioWorkspaceVersions(ctx context.Context, work
 	return err
 }
 
+const getYouTubeStudioBackendPID = `-- name: GetYouTubeStudioBackendPID :one
+SELECT pg_backend_pid()
+`
+
+func (q *Queries) GetYouTubeStudioBackendPID(ctx context.Context) (int32, error) {
+	row := q.db.QueryRow(ctx, getYouTubeStudioBackendPID)
+	var pg_backend_pid int32
+	err := row.Scan(&pg_backend_pid)
+	return pg_backend_pid, err
+}
+
 const markYouTubeStudioEventConsumed = `-- name: MarkYouTubeStudioEventConsumed :exec
 UPDATE youtube_studio_outbox SET consumed_at = now(), lease_token = NULL,
     attempt_count = attempt_count + 1, last_error = NULL, updated_at = now()
