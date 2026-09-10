@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/multica-ai/multica/server/internal/events"
@@ -63,6 +65,22 @@ type youtubeFixture struct {
 	agentID     pgtype.UUID
 	issueID     pgtype.UUID
 	otherIssue  pgtype.UUID
+}
+
+type youtubeFailCommitStarter struct{ pool *pgxpool.Pool }
+
+func (s youtubeFailCommitStarter) Begin(ctx context.Context) (pgx.Tx, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return youtubeFailCommitTx{Tx: tx}, nil
+}
+
+type youtubeFailCommitTx struct{ pgx.Tx }
+
+func (youtubeFailCommitTx) Commit(context.Context) error {
+	return errors.New("injected completion commit failure")
 }
 
 func youtubeFixtureSeed(t *testing.T, ctx context.Context, pool *pgxpool.Pool) youtubeFixture {
@@ -141,6 +159,164 @@ func TestYouTubeStudioBootstrapCreatesCleanProfileArtifactAndBinding(t *testing.
 	}
 	if profiles != 1 || artifacts != 1 || bindings != 1 {
 		t.Fatalf("clean bootstrap counts = profile %d/artifact %d/binding %d, want 1/1/1", profiles, artifacts, bindings)
+	}
+}
+
+func youtubeCount(t *testing.T, pool *pgxpool.Pool, ctx context.Context, query string, args ...any) int {
+	t.Helper()
+	var count int
+	if err := pool.QueryRow(ctx, query, args...).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	return count
+}
+
+func TestYouTubeStudioCompletionRollsBackBeforeCommit(t *testing.T) {
+	pool := youtubeStudioPool(t)
+	ctx := context.Background()
+	f := youtubeFixtureSeed(t, ctx, pool)
+	q := db.New(pool)
+	youtubeBind(t, ctx, pool, q, f, f.issueID, "brief")
+	taskID := youtubeTask(t, ctx, pool, f, f.issueID)
+	svc := &TaskService{Queries: q, TxStarter: youtubeFailCommitStarter{pool: pool}, Bus: events.New()}
+	if _, err := svc.CompleteTask(ctx, taskID, youtubeResult(t, "must roll back"), "", "", "", false, "", ""); err == nil {
+		t.Fatal("completion succeeded despite injected commit failure")
+	}
+	var status string
+	if err := pool.QueryRow(ctx, `SELECT status FROM agent_task_queue WHERE id = $1`, taskID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "running" || youtubeCount(t, pool, ctx, `SELECT count(*) FROM youtube_issue_result WHERE source_task_id = $1`, taskID) != 0 || youtubeCount(t, pool, ctx, `SELECT count(*) FROM youtube_studio_outbox WHERE workspace_id = $1`, f.workspaceID) != 0 {
+		t.Fatalf("rollback state = status %q/results %d/outbox %d, want running/0/0", status, youtubeCount(t, pool, ctx, `SELECT count(*) FROM youtube_issue_result WHERE source_task_id = $1`, taskID), youtubeCount(t, pool, ctx, `SELECT count(*) FROM youtube_studio_outbox WHERE workspace_id = $1`, f.workspaceID))
+	}
+}
+
+func TestYouTubeStudioClaimCrashReplaysAfterLeaseExpiry(t *testing.T) {
+	pool := youtubeStudioPool(t)
+	ctx := context.Background()
+	f := youtubeFixtureSeed(t, ctx, pool)
+	q := db.New(pool)
+	youtubeBind(t, ctx, pool, q, f, f.issueID, "brief")
+	taskID := youtubeTask(t, ctx, pool, f, f.issueID)
+	svc := &TaskService{Queries: q, TxStarter: pool, Bus: events.New()}
+	if _, err := svc.CompleteTask(ctx, taskID, youtubeResult(t, "replay me"), "", "", "", false, "", ""); err != nil {
+		t.Fatalf("complete task: %v", err)
+	}
+	var resultID, claimedEventID pgtype.UUID
+	if err := pool.QueryRow(ctx, `SELECT id, event_id FROM youtube_issue_result WHERE source_task_id = $1`, taskID).Scan(&resultID, &claimedEventID); err != nil {
+		t.Fatalf("load result event: %v", err)
+	}
+	var leaseToken pgtype.UUID
+	if err := pool.QueryRow(ctx, `UPDATE youtube_studio_outbox SET lease_token = gen_random_uuid(), next_attempt_at = now() - interval '1 second' WHERE event_id = $1 AND result_id = $2 RETURNING event_id, lease_token`, claimedEventID, resultID).Scan(&claimedEventID, &leaseToken); err != nil {
+		t.Fatalf("claim before simulated crash: %v", err)
+	}
+	claimed := claimedEventID
+	// The process disappears after claim and before projection commit. The
+	// already-expired lease is the database-equivalent of waiting past expiry,
+	// without making this regression depend on host/container clock skew.
+	worker := &youtubestudio.Worker{Queries: q, TxStarter: pool, MaxAttempts: 3}
+	if err := worker.ReconcileOnce(ctx); err != nil {
+		t.Fatalf("replay after lease expiry: %v", err)
+	}
+	var consumed bool
+	if err := pool.QueryRow(ctx, `SELECT consumed_at IS NOT NULL FROM youtube_studio_outbox WHERE event_id = $1`, claimed).Scan(&consumed); err != nil {
+		t.Fatal(err)
+	}
+	if !consumed || youtubeCount(t, pool, ctx, `SELECT count(*) FROM youtube_artifact_version WHERE source_task_id = $1`, taskID) != 1 {
+		t.Fatalf("replay state = consumed %t/versions %d, want true/1", consumed, youtubeCount(t, pool, ctx, `SELECT count(*) FROM youtube_artifact_version WHERE source_task_id = $1`, taskID))
+	}
+}
+
+func TestYouTubeStudioRejectsRelationDriftAndAmbiguousBindings(t *testing.T) {
+	pool := youtubeStudioPool(t)
+	ctx := context.Background()
+	f := youtubeFixtureSeed(t, ctx, pool)
+	q := db.New(pool)
+
+	// The active-binding uniqueness contract rejects ambiguity before it can
+	// become a partial ingestion.
+	youtubeBind(t, ctx, pool, q, f, f.issueID, "brief")
+	if _, err := pool.Exec(ctx, `INSERT INTO youtube_artifact (workspace_id, project_id, artifact_key) VALUES ($1, $2, 'script')`, f.workspaceID, f.projectID); err != nil {
+		t.Fatalf("seed second artifact: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO youtube_issue_binding (workspace_id, project_id, issue_id, artifact_key, kind) VALUES ($1, $2, $3, 'script', 'markdown')`, f.workspaceID, f.projectID, f.issueID); err == nil {
+		t.Fatal("second active binding was accepted")
+	}
+	ambiguousTask := youtubeTask(t, ctx, pool, f, f.issueID)
+	svc := &TaskService{Queries: q, TxStarter: pool, Bus: events.New()}
+	if _, err := svc.CompleteTask(ctx, ambiguousTask, youtubeResult(t, "ambiguous"), "", "", "", false, "", ""); err != nil {
+		t.Fatalf("ambiguous completion: %v", err)
+	}
+	if n := youtubeCount(t, pool, ctx, `SELECT count(*) FROM youtube_issue_result WHERE source_task_id = $1`, ambiguousTask); n != 1 {
+		t.Fatalf("valid binding after rejected ambiguity produced %d result rows, want 1", n)
+	}
+
+	// A binding is invalid once its issue moves to another project.
+	var movedProject, movedIssue pgtype.UUID
+	movedProject = youtubeMustUUID(t, pool, ctx, `INSERT INTO project (workspace_id, title) VALUES ($1, 'Moved project') RETURNING id`, f.workspaceID)
+	movedIssue = youtubeMustUUID(t, pool, ctx, `INSERT INTO issue (workspace_id, project_id, title, status, creator_type, creator_id, number) VALUES ($1, $2, 'Moved issue', 'in_progress', 'member', $3, 400000001) RETURNING id`, f.workspaceID, f.projectID, f.userID)
+	youtubeBind(t, ctx, pool, q, f, movedIssue, "brief")
+	movedTask := youtubeTask(t, ctx, pool, f, movedIssue)
+	if _, err := pool.Exec(ctx, `UPDATE issue SET project_id = $1 WHERE id = $2`, movedProject, movedIssue); err != nil {
+		t.Fatalf("move issue: %v", err)
+	}
+	if _, err := svc.CompleteTask(ctx, movedTask, youtubeResult(t, "moved"), "", "", "", false, "", ""); err != nil {
+		t.Fatalf("moved completion: %v", err)
+	}
+	if n := youtubeCount(t, pool, ctx, `SELECT count(*) FROM youtube_issue_result WHERE source_task_id = $1`, movedTask); n != 0 {
+		t.Fatalf("moved relation produced %d result rows", n)
+	}
+
+	// A parent from another workspace invalidates an otherwise matching child.
+	parentIssue := youtubeMustUUID(t, pool, ctx, `INSERT INTO issue (workspace_id, project_id, title, status, creator_type, creator_id, number) VALUES ($1, $2, 'Foreign parent', 'in_progress', 'member', $3, 400000002) RETURNING id`, f.otherWS, f.otherProj, f.userID)
+	childIssue := youtubeMustUUID(t, pool, ctx, `INSERT INTO issue (workspace_id, project_id, title, status, creator_type, creator_id, number) VALUES ($1, $2, 'Child issue', 'in_progress', 'member', $3, 400000003) RETURNING id`, f.workspaceID, f.projectID, f.userID)
+	youtubeBind(t, ctx, pool, q, f, childIssue, "brief")
+	childTask := youtubeTask(t, ctx, pool, f, childIssue)
+	if _, err := pool.Exec(ctx, `UPDATE issue SET parent_issue_id = $1 WHERE id = $2`, parentIssue, childIssue); err != nil {
+		t.Fatalf("set foreign parent: %v", err)
+	}
+	if _, err := svc.CompleteTask(ctx, childTask, youtubeResult(t, "foreign parent"), "", "", "", false, "", ""); err != nil {
+		t.Fatalf("foreign parent completion: %v", err)
+	}
+	if n := youtubeCount(t, pool, ctx, `SELECT count(*) FROM youtube_issue_result WHERE source_task_id = $1`, childTask); n != 0 {
+		t.Fatalf("foreign parent produced %d result rows", n)
+	}
+}
+
+func TestYouTubeStudioProgressAndNoBindingPreserveCommentBehavior(t *testing.T) {
+	pool := youtubeStudioPool(t)
+	ctx := context.Background()
+	f := youtubeFixtureSeed(t, ctx, pool)
+	q := db.New(pool)
+
+	noBindingTask := youtubeTask(t, ctx, pool, f, f.issueID)
+	svc := &TaskService{Queries: q, TxStarter: pool, Bus: events.New()}
+	if _, err := svc.CompleteTask(ctx, noBindingTask, youtubeResult(t, "ordinary completion"), "", "", "", false, "", ""); err != nil {
+		t.Fatalf("no-binding completion: %v", err)
+	}
+	if n := youtubeCount(t, pool, ctx, `SELECT count(*) FROM youtube_issue_result WHERE source_task_id = $1`, noBindingTask); n != 0 {
+		t.Fatalf("no-binding task produced %d result rows", n)
+	}
+	if n := youtubeCount(t, pool, ctx, `SELECT count(*) FROM comment WHERE source_task_id = $1`, noBindingTask); n != 1 {
+		t.Fatalf("no-binding completion produced %d fallback comments, want 1", n)
+	}
+
+	youtubeBind(t, ctx, pool, q, f, f.issueID, "brief")
+	progressTask := youtubeTask(t, ctx, pool, f, f.issueID)
+	if _, err := q.CreateComment(ctx, db.CreateCommentParams{
+		IssueID: f.issueID, WorkspaceID: f.workspaceID, AuthorType: "agent", AuthorID: f.agentID,
+		Content: "progress update", Type: "comment", SourceTaskID: progressTask,
+	}); err != nil {
+		t.Fatalf("progress comment: %v", err)
+	}
+	if n := youtubeCount(t, pool, ctx, `SELECT count(*) FROM youtube_issue_result WHERE source_task_id = $1`, progressTask); n != 0 {
+		t.Fatalf("progress comment produced %d terminal results", n)
+	}
+	if _, err := svc.CompleteTask(ctx, progressTask, youtubeResult(t, "terminal output"), "", "", "", false, "", ""); err != nil {
+		t.Fatalf("completion after progress: %v", err)
+	}
+	if n := youtubeCount(t, pool, ctx, `SELECT count(*) FROM youtube_issue_result WHERE source_task_id = $1`, progressTask); n != 1 {
+		t.Fatalf("completion after progress produced %d result rows, want 1", n)
 	}
 }
 

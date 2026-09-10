@@ -13,6 +13,11 @@ WITH candidate AS (
         AND a.workspace_id = v.workspace_id AND a.artifact_key = b.artifact_key
     WHERE t.id = sqlc.arg('source_task_id') AND t.status = 'completed'
       AND i.workspace_id = sqlc.arg('workspace_id')
+      AND (SELECT count(*) FROM youtube_issue_binding active_binding
+           WHERE active_binding.workspace_id = i.workspace_id
+             AND active_binding.project_id = i.project_id
+             AND active_binding.issue_id = i.id
+             AND active_binding.active) = 1
       AND (i.parent_issue_id IS NULL OR EXISTS (
           SELECT 1 FROM issue parent
           WHERE parent.id = i.parent_issue_id
