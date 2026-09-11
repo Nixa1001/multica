@@ -473,7 +473,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	if seatcapacity.CanRunWorker(h.SeatCapacity) {
 		h.SeatCapacityWorker = seatcapacity.NewWorker(queries, h.SeatCapacity, capacityLocker, seatcapacity.WorkerConfig{})
 	}
-	h.YouTubeStudioWorker = &youtubestudio.Worker{Queries: queries, TxStarter: pool}
+	h.YouTubeStudioWorker = &youtubestudio.Worker{Queries: queries, TxStarter: pool, Logger: slog.Default()}
 	if opts.BusinessMetrics != nil {
 		// Wire the BusinessMetrics receiver into the cloud runtime client
 		// so every outbound Fleet/Gateway request feeds the

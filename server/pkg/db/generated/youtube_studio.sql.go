@@ -19,8 +19,9 @@ WITH profile AS (
     ON CONFLICT (project_id) DO NOTHING
 ), artifact AS (
     INSERT INTO youtube_artifact (workspace_id, project_id, artifact_key)
-    SELECT $1, $2, $3
-    WHERE EXISTS (SELECT 1 FROM youtube_video_project v WHERE v.workspace_id = $1 AND v.project_id = $2)
+    SELECT p.workspace_id, p.id, $3
+    FROM project p
+    WHERE p.id = $2 AND p.workspace_id = $1
     ON CONFLICT (workspace_id, project_id, artifact_key) DO NOTHING
 )
 INSERT INTO youtube_issue_binding (workspace_id, project_id, issue_id, artifact_key, kind)
@@ -31,7 +32,7 @@ WHERE i.id = $4 AND i.workspace_id = $1 AND i.project_id = $2
       SELECT 1 FROM issue parent WHERE parent.id = i.parent_issue_id
         AND parent.workspace_id = i.workspace_id AND parent.project_id = i.project_id
   ))
-  AND EXISTS (SELECT 1 FROM youtube_artifact a WHERE a.workspace_id = $1 AND a.project_id = $2 AND a.artifact_key = $3)
+  AND EXISTS (SELECT 1 FROM project p WHERE p.id = $2 AND p.workspace_id = $1)
 ON CONFLICT (workspace_id, issue_id) WHERE active DO NOTHING
 `
 
@@ -224,6 +225,17 @@ func (q *Queries) DeleteYouTubeStudioWorkspaceVersions(ctx context.Context, work
 	return err
 }
 
+const getYouTubeStudioBackendPID = `-- name: GetYouTubeStudioBackendPID :one
+SELECT pg_backend_pid()
+`
+
+func (q *Queries) GetYouTubeStudioBackendPID(ctx context.Context) (int32, error) {
+	row := q.db.QueryRow(ctx, getYouTubeStudioBackendPID)
+	var pg_backend_pid int32
+	err := row.Scan(&pg_backend_pid)
+	return pg_backend_pid, err
+}
+
 const markYouTubeStudioEventConsumed = `-- name: MarkYouTubeStudioEventConsumed :exec
 UPDATE youtube_studio_outbox SET consumed_at = now(), lease_token = NULL,
     attempt_count = attempt_count + 1, last_error = NULL, updated_at = now()
@@ -282,7 +294,7 @@ func (q *Queries) MarkYouTubeStudioEventFailed(ctx context.Context, arg MarkYouT
 	return err
 }
 
-const projectYouTubeStudioEvent = `-- name: ProjectYouTubeStudioEvent :exec
+const projectYouTubeStudioEvent = `-- name: ProjectYouTubeStudioEvent :one
 WITH source AS (
     SELECT o.result_id, r.artifact_id, r.workspace_id, r.source_issue_id,
            r.source_task_id, r.markdown, r.sha256, r.recorded_at,
@@ -311,10 +323,21 @@ WITH source AS (
     UPDATE youtube_artifact a SET current_version_number = inserted.version_number,
         updated_at = now()
     FROM inserted WHERE a.id = inserted.artifact_id
+    RETURNING a.id AS artifact_id, inserted.version_number
+), existing AS (
+    SELECT v.artifact_id, v.version_number
+    FROM source
+    JOIN youtube_artifact_version v ON v.source_result_id = source.result_id
+), projected AS (
+    SELECT artifact_id, version_number FROM bumped
+    UNION ALL
+    SELECT artifact_id, version_number FROM existing
 )
 UPDATE youtube_studio_outbox o SET consumed_at = now(), lease_token = NULL,
     attempt_count = attempt_count + 1, last_error = NULL, updated_at = now()
+FROM projected
 WHERE o.event_id = $1 AND o.lease_token = $2
+RETURNING o.event_id
 `
 
 type ProjectYouTubeStudioEventParams struct {
@@ -322,9 +345,11 @@ type ProjectYouTubeStudioEventParams struct {
 	LeaseToken pgtype.UUID `json:"lease_token"`
 }
 
-func (q *Queries) ProjectYouTubeStudioEvent(ctx context.Context, arg ProjectYouTubeStudioEventParams) error {
-	_, err := q.db.Exec(ctx, projectYouTubeStudioEvent, arg.EventID, arg.LeaseToken)
-	return err
+func (q *Queries) ProjectYouTubeStudioEvent(ctx context.Context, arg ProjectYouTubeStudioEventParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, projectYouTubeStudioEvent, arg.EventID, arg.LeaseToken)
+	var event_id pgtype.UUID
+	err := row.Scan(&event_id)
+	return event_id, err
 }
 
 const recordYouTubeMarkdownResult = `-- name: RecordYouTubeMarkdownResult :one
@@ -342,6 +367,11 @@ WITH candidate AS (
         AND a.workspace_id = v.workspace_id AND a.artifact_key = b.artifact_key
     WHERE t.id = $1 AND t.status = 'completed'
       AND i.workspace_id = $2
+      AND (SELECT count(*) FROM youtube_issue_binding active_binding
+           WHERE active_binding.workspace_id = i.workspace_id
+             AND active_binding.project_id = i.project_id
+             AND active_binding.issue_id = i.id
+             AND active_binding.active) = 1
       AND (i.parent_issue_id IS NULL OR EXISTS (
           SELECT 1 FROM issue parent
           WHERE parent.id = i.parent_issue_id

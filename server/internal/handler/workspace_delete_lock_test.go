@@ -87,6 +87,20 @@ VALUES ($1, $2, 'owner')
 `, wsID, testUserID); err != nil {
 		t.Fatalf("create owner member: %v", err)
 	}
+	var youtubeProjectID string
+	if err := testPool.QueryRow(ctx, `INSERT INTO project (workspace_id, title) VALUES ($1, 'YouTube delete coverage') RETURNING id`, wsID).Scan(&youtubeProjectID); err != nil {
+		t.Fatalf("create YouTube project: %v", err)
+	}
+	var youtubeArtifactID string
+	if err := testPool.QueryRow(ctx, `INSERT INTO youtube_video_project (workspace_id, project_id) VALUES ($1, $2) RETURNING project_id`, wsID, youtubeProjectID).Scan(new(string)); err != nil {
+		t.Fatalf("create YouTube profile: %v", err)
+	}
+	if err := testPool.QueryRow(ctx, `INSERT INTO youtube_artifact (workspace_id, project_id, artifact_key) VALUES ($1, $2, 'brief') RETURNING id`, wsID, youtubeProjectID).Scan(&youtubeArtifactID); err != nil {
+		t.Fatalf("create YouTube artifact: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `INSERT INTO youtube_studio_outbox (event_id, workspace_id, result_id, event_kind, payload, next_attempt_at) VALUES (gen_random_uuid(), $1, gen_random_uuid(), 'IssueResultRecordedV1', '{}'::jsonb, now())`, wsID); err != nil {
+		t.Fatalf("create pending YouTube outbox: %v", err)
+	}
 
 	// The handler runs on its own goroutine so a regression shows up as a
 	// failed deadline here instead of hanging the whole test binary.
@@ -173,5 +187,14 @@ VALUES ($1, $2, 'owner')
 	}
 	if exists {
 		t.Fatal("workspace still exists after a successful delete")
+	}
+	for _, table := range []string{"youtube_studio_outbox", "youtube_issue_result", "youtube_artifact_version", "youtube_artifact", "youtube_issue_binding", "youtube_video_project"} {
+		var remaining int
+		if err := testPool.QueryRow(ctx, `SELECT count(*) FROM `+table+` WHERE workspace_id = $1`, wsID).Scan(&remaining); err != nil {
+			t.Fatalf("check YouTube cleanup in %s: %v", table, err)
+		}
+		if remaining != 0 {
+			t.Fatalf("workspace deletion left %d rows in %s", remaining, table)
+		}
 	}
 }
