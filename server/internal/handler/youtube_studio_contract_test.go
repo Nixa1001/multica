@@ -15,6 +15,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/multica-ai/multica/server/internal/service"
 )
 
 type youtubeFaultRow struct{ err error }
@@ -659,13 +660,15 @@ func TestYouTubeStudioBindDeleteRaceLeavesNoOrphans(t *testing.T) {
 		_, _ = testPool.Exec(ctx, `DELETE FROM issue WHERE id=$1`, issue)
 		_, _ = testPool.Exec(ctx, `DELETE FROM project WHERE id=$1`, project)
 	})
-	deleteStarted := make(chan struct{})
+	deleteBefore := make(chan struct{})
+	deleteAcquired := make(chan struct{})
 	deleteDone := make(chan error, 1)
 	clone := *testHandler
 	clone.YouTubeStudioBindAfterProjectLock = func() {
 		go func() {
-			close(deleteStarted)
+			observer := &service.YouTubeStudioProjectLockObserver{Before: func(int32) { close(deleteBefore) }, Acquired: func(int32) { close(deleteAcquired) }}
 			req := withURLParam(newRequest(http.MethodDelete, "/api/projects/"+project, nil), "id", project)
+			req = req.WithContext(service.WithYouTubeStudioProjectLockObserver(req.Context(), observer))
 			w := httptest.NewRecorder()
 			testHandler.DeleteProject(w, req)
 			if w.Code != http.StatusNoContent {
@@ -674,7 +677,12 @@ func TestYouTubeStudioBindDeleteRaceLeavesNoOrphans(t *testing.T) {
 				deleteDone <- nil
 			}
 		}()
-		waitForChannel(t, deleteStarted, "delete overlap")
+		waitForChannel(t, deleteBefore, "delete FOR UPDATE attempt")
+		select {
+		case <-deleteAcquired:
+			t.Fatal("delete acquired FOR UPDATE before PUT released FOR KEY SHARE")
+		default:
+		}
 	}
 	req := youtubeHandlerURL(httptest.NewRequest(http.MethodPut, "/api/youtube-studio/videos/"+project+"/markdown-bindings/"+issue+"?workspace_id="+testWorkspaceID, nil), project, issue)
 	w := httptest.NewRecorder()
@@ -690,6 +698,7 @@ func TestYouTubeStudioBindDeleteRaceLeavesNoOrphans(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("delete did not complete")
 	}
+	waitForChannel(t, deleteAcquired, "delete acquired FOR UPDATE after PUT commit")
 	for _, table := range []string{"youtube_video_project", "youtube_artifact", "youtube_issue_binding"} {
 		var n int
 		if err := testPool.QueryRow(ctx, `SELECT count(*) FROM `+table+` WHERE project_id=$1`, project).Scan(&n); err != nil {
