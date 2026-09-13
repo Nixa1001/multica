@@ -1,0 +1,12 @@
+import { queryOptions } from "@tanstack/react-query";
+import { api } from "../api";
+
+export const youtubeStudioKeys = {
+  all: (wsId: string) => ["youtube-studio", wsId] as const,
+  videos: (wsId: string) => [...youtubeStudioKeys.all(wsId), "videos"] as const,
+  video: (wsId: string, videoId: string) => [...youtubeStudioKeys.videos(wsId), videoId] as const,
+  versions: (wsId: string, videoId: string, artifactId: string) => [...youtubeStudioKeys.video(wsId, videoId), "versions", artifactId] as const,
+};
+export const youtubeStudioVideosOptions = (wsId: string) => queryOptions({ queryKey: youtubeStudioKeys.videos(wsId), queryFn: () => api.listYoutubeStudioVideos() });
+export const youtubeStudioVideoOptions = (wsId: string, videoId: string) => queryOptions({ queryKey: youtubeStudioKeys.video(wsId, videoId), queryFn: () => api.getYoutubeStudioVideo(videoId), refetchInterval: (query) => query.state.data?.materials.some((m) => m.ingestion.state === "processing" || m.ingestion.state === "retrying") ? 2000 : false });
+export const youtubeStudioVersionsOptions = (wsId: string, videoId: string, artifactId: string) => queryOptions({ queryKey: youtubeStudioKeys.versions(wsId, videoId, artifactId), queryFn: () => api.listYoutubeStudioVersions(videoId, artifactId) });

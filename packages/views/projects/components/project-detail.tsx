@@ -10,6 +10,7 @@ import { toast } from "sonner";
 import type { ProjectStatus, ProjectPriority } from "@multica/core/types";
 import { useAuthStore } from "@multica/core/auth";
 import { projectDetailOptions } from "@multica/core/projects/queries";
+import { youtubeStudioVideosOptions } from "@multica/core/youtube-studio";
 import { useUpdateProject, useDeleteProject } from "@multica/core/projects/mutations";
 import { pinListOptions } from "@multica/core/pins";
 import { useCreatePin, useDeletePin } from "@multica/core/pins";
@@ -108,6 +109,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
   const router = useNavigation();
   const userId = useAuthStore((s) => s.user?.id);
   const { data: project, isLoading } = useQuery(projectDetailOptions(wsId, projectId));
+  const { data: studioVideos } = useQuery(youtubeStudioVideosOptions(wsId));
   const recordRecentContext = useRecentContextStore((s) => s.recordVisit);
   useEffect(() => {
     if (project) {
@@ -483,6 +485,11 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
             leaf={<span className="truncate font-medium text-foreground">{project.title}</span>}
             actions={
               <>
+              {studioVideos?.videos.some((video) => video.video_id === projectId) && (
+                <Button variant="outline" size="sm" onClick={() => router.push(wsPaths.youtubeStudioVideo(projectId))}>
+                  YouTube Studio
+                </Button>
+              )}
               <Button
                 variant="ghost"
                 size="icon-sm"

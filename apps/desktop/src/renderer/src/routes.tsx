@@ -3,6 +3,7 @@ import { createMemoryRouter, Outlet, useMatches } from "react-router-dom";
 import type { RouteObject } from "react-router-dom";
 import { IssueDetailPage } from "./pages/issue-detail-page";
 import { ProjectDetailPage } from "./pages/project-detail-page";
+import { YoutubeStudioPage } from "./pages/youtube-studio-page";
 import { AutopilotDetailPage } from "./pages/autopilot-detail-page";
 import { SkillDetailPage } from "./pages/skill-detail-page";
 import { AgentDetailPage } from "./pages/agent-detail-page";
@@ -147,6 +148,8 @@ export const appRoutes: RouteObject[] = [
             element: <ProjectDetailPage />,
             handle: { title: "Project" },
           },
+          { path: "youtube-studio", element: <YoutubeStudioPage />, handle: { title: "YouTube Studio" } },
+          { path: "youtube-studio/:videoId", element: <YoutubeStudioPage />, handle: { title: "YouTube Studio" } },
           {
             path: "autopilots",
             element: <AutopilotsPage />,

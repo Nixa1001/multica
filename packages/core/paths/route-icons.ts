@@ -49,6 +49,7 @@ export type NavLabelKey =
   | "my_issues"
   | "issues"
   | "projects"
+  | "youtube_studio"
   | "autopilots"
   | "agents"
   | "squads"
@@ -64,6 +65,7 @@ export type WorkspacePageKey =
   | "myIssues"
   | "issues"
   | "projects"
+  | "youtubeStudio"
   | "autopilots"
   | "agents"
   | "squads"
@@ -91,6 +93,7 @@ export const WORKSPACE_PAGES: Record<WorkspacePageKey, WorkspacePage> = {
   myIssues: { segment: "my-issues", icon: "CircleUser", navKey: "my_issues" },
   issues: { segment: "issues", icon: "ListTodo", navKey: "issues" },
   projects: { segment: "projects", icon: "FolderKanban", navKey: "projects" },
+  youtubeStudio: { segment: "youtube-studio", icon: "FileVideo", navKey: "youtube_studio" },
   autopilots: { segment: "autopilots", icon: "Zap", navKey: "autopilots" },
   agents: { segment: "agents", icon: "Bot", navKey: "agents" },
   squads: { segment: "squads", icon: "Users", navKey: "squads" },

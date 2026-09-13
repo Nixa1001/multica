@@ -66,6 +66,7 @@ import {
 } from "../chat/queries";
 import { useChatStore } from "../chat";
 import { upsertChatMessageToCaches } from "../chat/message-cache";
+import { youtubeStudioKeys } from "../youtube-studio";
 import {
   promotePendingChatTask,
   removePendingChatTask,
@@ -1603,6 +1604,8 @@ export function useRealtimeSync(
 
     const unsubTaskCompleted = ws.on("task:completed", (p) => {
       const payload = p as TaskCompletedPayload;
+      const currentWorkspaceId = getCurrentWsId();
+      if (currentWorkspaceId) qc.invalidateQueries({ queryKey: youtubeStudioKeys.all(currentWorkspaceId) });
       if (!payload.chat_session_id) return; // issue tasks handled elsewhere
       chatWsLogger.info("task:completed (global, chat)", {
         task_id: payload.task_id,
