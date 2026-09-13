@@ -7,6 +7,7 @@ package handler
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -109,8 +110,12 @@ func (h *Handler) YouTubeStudioBind(w http.ResponseWriter, r *http.Request) {
 	created := err == nil
 	if !created {
 		err = tx.QueryRow(ctx, `SELECT b.id,b.created_at FROM youtube_issue_binding b WHERE b.workspace_id=$1 AND b.project_id=$2 AND b.issue_id=$3 AND b.active`, workspaceID, projectID, issueID).Scan(&id, &createdAt)
-		if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
 			writeErrorCode(w, 409, "studio_binding_conflict", "Studio binding conflicts with an existing binding")
+			return
+		}
+		if err != nil {
+			writeErrorCode(w, 500, "studio_bootstrap_failed", "Studio activation failed")
 			return
 		}
 	}
@@ -162,6 +167,10 @@ func (h *Handler) YouTubeStudioVideos(w http.ResponseWriter, r *http.Request) {
 		videos = append(videos, map[string]any{"video_id": uuidToString(id), "name": name, "icon": nilIfEmpty(icon), "lifecycle_state": state, "material_count": mc, "attention_count": ac, "updated_at": at.UTC().Format(time.RFC3339Nano)})
 		last = youtubeCursor{At: at, ID: uuidToString(id)}
 	}
+	if e = rows.Err(); e != nil {
+		writeErrorCode(w, 500, "studio_read_failed", "Studio read failed")
+		return
+	}
 	next := any(nil)
 	if len(videos) == limit {
 		next = youtubeCursorEncode(last)
@@ -203,7 +212,7 @@ func (h *Handler) YouTubeStudioVideo(w http.ResponseWriter, r *http.Request) {
 		writeErrorCode(w, 404, "studio_video_not_found", "Studio video not found")
 		return
 	}
-	rows, e := h.DB.Query(ctx, `SELECT b.id,a.id,b.kind,b.issue_id,i.number,i.title,i.status,i.id IS NOT NULL,v.id,v.version_number,v.sha256,v.recorded_at,r.id,CASE WHEN v.id IS NOT NULL THEN 'available' ELSE 'unavailable' END,CASE WHEN v.id IS NOT NULL THEN 'ready' WHEN r.id IS NOT NULL THEN 'processing' ELSE 'awaiting_result' END FROM youtube_issue_binding b JOIN youtube_artifact a ON a.workspace_id=b.workspace_id AND a.project_id=b.project_id AND a.artifact_key=b.artifact_key LEFT JOIN issue i ON i.id=b.issue_id AND i.workspace_id=b.workspace_id AND i.project_id=b.project_id LEFT JOIN youtube_artifact_version v ON v.artifact_id=a.id AND v.version_number=a.current_version_number LEFT JOIN LATERAL (SELECT id FROM youtube_issue_result WHERE binding_id=b.id AND workspace_id=b.workspace_id ORDER BY recorded_at DESC LIMIT 1) r ON true WHERE b.workspace_id=$1 AND b.project_id=$2 AND b.active ORDER BY b.created_at,b.id`, wid, vid)
+	rows, e := h.DB.Query(ctx, `SELECT b.id,a.id,b.kind,b.issue_id,i.number,i.title,i.status,i.id IS NOT NULL,v.id,v.version_number,v.sha256,v.recorded_at,r.id,r.recorded_at,o.attempt_count,o.next_attempt_at,o.dead_lettered_at,o.consumed_at,CASE WHEN i.id IS NULL THEN 'unavailable' WHEN v.id IS NOT NULL AND (r.id IS NULL OR r.recorded_at <= v.recorded_at) THEN 'available' ELSE 'available' END,CASE WHEN r.id IS NULL THEN 'awaiting_result' WHEN o.dead_lettered_at IS NOT NULL THEN 'failed' WHEN v.id IS NULL OR r.recorded_at > v.recorded_at THEN CASE WHEN o.attempt_count > 1 THEN 'retrying' ELSE 'processing' END ELSE 'ready' END FROM youtube_issue_binding b JOIN youtube_artifact a ON a.workspace_id=b.workspace_id AND a.project_id=b.project_id AND a.artifact_key=b.artifact_key LEFT JOIN issue i ON i.id=b.issue_id AND i.workspace_id=b.workspace_id AND i.project_id=b.project_id LEFT JOIN youtube_artifact_version v ON v.artifact_id=a.id AND v.version_number=a.current_version_number LEFT JOIN LATERAL (SELECT id,recorded_at FROM youtube_issue_result WHERE binding_id=b.id AND workspace_id=b.workspace_id ORDER BY recorded_at DESC LIMIT 1) r ON true LEFT JOIN LATERAL (SELECT attempt_count,next_attempt_at,dead_lettered_at,consumed_at FROM youtube_studio_outbox WHERE result_id=r.id AND workspace_id=b.workspace_id ORDER BY created_at DESC LIMIT 1) o ON true WHERE b.workspace_id=$1 AND b.project_id=$2 AND b.active ORDER BY b.created_at,b.id`, wid, vid)
 	if e != nil {
 		writeErrorCode(w, 500, "studio_read_failed", "Studio read failed")
 		return
@@ -212,25 +221,40 @@ func (h *Handler) YouTubeStudioVideo(w http.ResponseWriter, r *http.Request) {
 	materials := []any{}
 	for rows.Next() {
 		var bid, aid, iid, versionID, resultID pgtype.UUID
-		var kind, prefixState, ingest string
-		var number, version int
-		var title, status string
+		var kind string
+		var number pgtype.Int8
+		var title, status, hash pgtype.Text
 		var hasIssue bool
-		var hash string
-		var recorded time.Time
-		if e = rows.Scan(&bid, &aid, &kind, &iid, &number, &title, &status, &hasIssue, &versionID, &version, &hash, &recorded, &resultID, &prefixState, &ingest); e != nil {
+		var version pgtype.Int4
+		var recorded, resultRecorded, nextAttempt pgtype.Timestamptz
+		var attempts pgtype.Int4
+		var deadLettered, consumed pgtype.Timestamptz
+		var sourceState, ingest string
+		if e = rows.Scan(&bid, &aid, &kind, &iid, &number, &title, &status, &hasIssue, &versionID, &version, &hash, &recorded, &resultID, &resultRecorded, &attempts, &nextAttempt, &deadLettered, &consumed, &sourceState, &ingest); e != nil {
 			writeErrorCode(w, 500, "studio_read_failed", "Studio read failed")
 			return
 		}
 		var source any
 		if hasIssue {
-			source = map[string]any{"id": uuidToString(iid), "identifier": strconv.Itoa(number), "title": title, "status": status}
+			source = map[string]any{"id": uuidToString(iid), "identifier": strconv.FormatInt(number.Int64, 10), "title": title.String, "status": status.String}
 		}
 		var current any
 		if versionID.Valid {
-			current = map[string]any{"id": uuidToString(versionID), "version_number": version, "sha256": hash, "recorded_at": recorded.UTC().Format(time.RFC3339Nano)}
+			current = map[string]any{"id": uuidToString(versionID), "version_number": version.Int32, "sha256": hash.String, "recorded_at": recorded.Time.UTC().Format(time.RFC3339Nano)}
 		}
-		materials = append(materials, map[string]any{"binding_id": uuidToString(bid), "artifact_id": uuidToString(aid), "kind": kind, "source_issue": source, "source_state": prefixState, "current_version": current, "ingestion": map[string]any{"state": ingest, "attempt_count": 1, "next_attempt_at": nil, "failure_code": nil}})
+		var attemptCount int32
+		if attempts.Valid {
+			attemptCount = attempts.Int32
+		}
+		var next any
+		if nextAttempt.Valid {
+			next = nextAttempt.Time.UTC().Format(time.RFC3339Nano)
+		}
+		materials = append(materials, map[string]any{"binding_id": uuidToString(bid), "artifact_id": uuidToString(aid), "kind": kind, "source_issue": source, "source_state": sourceState, "current_version": current, "ingestion": map[string]any{"state": ingest, "attempt_count": attemptCount, "next_attempt_at": next, "failure_code": nil}})
+	}
+	if e = rows.Err(); e != nil {
+		writeErrorCode(w, 500, "studio_read_failed", "Studio read failed")
+		return
 	}
 	writeJSON(w, 200, map[string]any{"video_id": uuidToString(vid), "name": name, "lifecycle_state": state, "materials": materials})
 }
@@ -261,6 +285,11 @@ func (h *Handler) YouTubeStudioVersions(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		before = n
+	}
+	var artifactExists pgtype.UUID
+	if e := h.DB.QueryRow(r.Context(), `SELECT a.id FROM youtube_artifact a JOIN youtube_video_project v ON v.project_id=a.project_id AND v.workspace_id=a.workspace_id WHERE a.workspace_id=$1 AND a.project_id=$2 AND a.id=$3`, wid, vid, aid).Scan(&artifactExists); e != nil {
+		writeErrorCode(w, http.StatusNotFound, "studio_version_not_found", "Studio version not found")
+		return
 	}
 	rows, e := h.DB.Query(r.Context(), `SELECT v.id,v.artifact_id,v.version_number,v.sha256,v.recorded_at,v.source_result_id,v.source_issue_id,v.source_task_id FROM youtube_artifact_version v JOIN youtube_artifact a ON a.id=v.artifact_id AND a.workspace_id=v.workspace_id WHERE v.workspace_id=$1 AND a.project_id=$2 AND v.artifact_id=$3 AND ($4::int IS NULL OR v.version_number<$4) ORDER BY v.version_number DESC LIMIT $5`, wid, vid, aid, before, limit)
 	if e != nil {

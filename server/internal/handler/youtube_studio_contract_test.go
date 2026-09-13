@@ -1,0 +1,107 @@
+package handler
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/go-chi/chi/v5"
+)
+
+func youtubeHandlerURL(r *http.Request, video, issue string) *http.Request {
+	ctx := chi.NewRouteContext()
+	ctx.URLParams.Add("video_id", video)
+	ctx.URLParams.Add("issue_id", issue)
+	return r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, ctx))
+}
+
+func youtubeVersionURL(r *http.Request, video, artifact string) *http.Request {
+	ctx := chi.NewRouteContext()
+	ctx.URLParams.Add("video_id", video)
+	ctx.URLParams.Add("artifact_id", artifact)
+	return r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, ctx))
+}
+
+func TestYouTubeStudioBindRetryAndFirstRead(t *testing.T) {
+	ctx := context.Background()
+	var project, issue string
+	if err := testPool.QueryRow(ctx, `INSERT INTO project(workspace_id,title) VALUES($1,'HTTP Studio contract') RETURNING id`, testWorkspaceID).Scan(&project); err != nil {
+		t.Fatal(err)
+	}
+	if err := testPool.QueryRow(ctx, `INSERT INTO issue(workspace_id,project_id,title,status,creator_type,creator_id,number) VALUES($1,$2,'HTTP source','in_progress','member',$3,900000001) RETURNING id`, testWorkspaceID, project, testUserID).Scan(&issue); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(ctx, `DELETE FROM issue WHERE id=$1`, issue)
+		_, _ = testPool.Exec(ctx, `DELETE FROM project WHERE id=$1`, project)
+	})
+	for n := 0; n < 2; n++ {
+		req := youtubeHandlerURL(httptest.NewRequest(http.MethodPut, "/api/youtube-studio/videos/"+project+"/markdown-bindings/"+issue+"?workspace_id="+testWorkspaceID, nil), project, issue)
+		w := httptest.NewRecorder()
+		testHandler.YouTubeStudioBind(w, req)
+		want := http.StatusCreated
+		if n == 1 {
+			want = http.StatusOK
+		}
+		if w.Code != want {
+			t.Fatalf("retry %d status=%d want %d: %s", n, w.Code, want, w.Body.String())
+		}
+	}
+	var profiles, artifacts, bindings int
+	if err := testPool.QueryRow(ctx, `SELECT (SELECT count(*) FROM youtube_video_project WHERE project_id=$1),(SELECT count(*) FROM youtube_artifact WHERE project_id=$1),(SELECT count(*) FROM youtube_issue_binding WHERE issue_id=$2)`, project, issue).Scan(&profiles, &artifacts, &bindings); err != nil {
+		t.Fatal(err)
+	}
+	if profiles != 1 || artifacts != 1 || bindings != 1 {
+		t.Fatalf("rows=%d/%d/%d want 1/1/1", profiles, artifacts, bindings)
+	}
+	w := httptest.NewRecorder()
+	testHandler.YouTubeStudioVideo(w, youtubeHandlerURL(httptest.NewRequest(http.MethodGet, "/api/youtube-studio/videos/"+project+"?workspace_id="+testWorkspaceID, nil), project, issue))
+	if w.Code != http.StatusOK {
+		t.Fatalf("detail status=%d: %s", w.Code, w.Body.String())
+	}
+	var body struct {
+		Materials []struct {
+			Ingestion struct {
+				State string `json:"state"`
+			} `json:"ingestion"`
+		} `json:"materials"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Materials) != 1 || body.Materials[0].Ingestion.State != "awaiting_result" {
+		t.Fatalf("unexpected first state: %s", w.Body.String())
+	}
+}
+
+func TestYouTubeStudioVersionsRejectsMismatchedArtifact(t *testing.T) {
+	ctx := context.Background()
+	var project, other, artifact string
+	if err := testPool.QueryRow(ctx, `INSERT INTO project(workspace_id,title) VALUES($1,'HTTP scope'),($1,'HTTP other') RETURNING id`, testWorkspaceID).Scan(&project); err != nil {
+		t.Fatal(err)
+	}
+	// Use an explicit second project so the artifact UUID is valid but foreign.
+	if err := testPool.QueryRow(ctx, `SELECT id FROM project WHERE workspace_id=$1 AND title='HTTP other' ORDER BY created_at DESC LIMIT 1`, testWorkspaceID).Scan(&other); err != nil {
+		t.Fatal(err)
+	}
+	if err := testPool.QueryRow(ctx, `INSERT INTO youtube_video_project(workspace_id,project_id) VALUES($1,$2) RETURNING project_id`, testWorkspaceID, other).Scan(&other); err != nil {
+		t.Fatal(err)
+	}
+	if err := testPool.QueryRow(ctx, `INSERT INTO youtube_artifact(workspace_id,project_id,artifact_key) VALUES($1,$2,'foreign') RETURNING id`, testWorkspaceID, other).Scan(&artifact); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(ctx, `DELETE FROM youtube_artifact WHERE id=$1`, artifact)
+		_, _ = testPool.Exec(ctx, `DELETE FROM youtube_video_project WHERE project_id=$1`, other)
+		_, _ = testPool.Exec(ctx, `DELETE FROM project WHERE id IN ($1,$2)`, project, other)
+	})
+	req := httptest.NewRequest(http.MethodGet, "/api/youtube-studio/videos/"+project+"/artifacts/"+artifact+"/versions?workspace_id="+testWorkspaceID, nil)
+	req = youtubeVersionURL(req, project, artifact)
+	w := httptest.NewRecorder()
+	testHandler.YouTubeStudioVersions(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status=%d want 404: %s", w.Code, w.Body.String())
+	}
+}
