@@ -238,6 +238,7 @@ import { type Logger, noopLogger } from "../logger";
 import { createRequestId, createSafeId } from "../utils";
 import { getCurrentSlug } from "../platform/workspace-storage";
 import { parseWithFallback } from "./schema";
+import { StudioVideosSchema, StudioVideoDetailSchema, StudioVersionsSchema, StudioVersionSchema, EMPTY_STUDIO_VIDEOS, EMPTY_STUDIO_DETAIL, EMPTY_STUDIO_VERSIONS, EMPTY_STUDIO_VERSION } from "../youtube-studio/schema";
 import {
   AgentTaskListSchema,
   AttachmentResponseSchema,
@@ -3562,10 +3563,10 @@ export class ApiClient {
     return this.fetch(`/api/projects/${id}`);
   }
 
-  async listYoutubeStudioVideos(): Promise<StudioVideosResponse> { return this.fetch("/api/youtube-studio/videos?limit=50"); }
-  async getYoutubeStudioVideo(videoId: string): Promise<StudioVideoDetail> { return this.fetch(`/api/youtube-studio/videos/${encodeURIComponent(videoId)}`); }
-  async listYoutubeStudioVersions(videoId: string, artifactId: string): Promise<StudioVersionsResponse> { return this.fetch(`/api/youtube-studio/videos/${encodeURIComponent(videoId)}/artifacts/${encodeURIComponent(artifactId)}/versions?limit=20`); }
-  async getYoutubeStudioVersion(videoId: string, artifactId: string, versionId: string): Promise<StudioVersion> { return this.fetch(`/api/youtube-studio/videos/${encodeURIComponent(videoId)}/artifacts/${encodeURIComponent(artifactId)}/versions/${encodeURIComponent(versionId)}`); }
+  async listYoutubeStudioVideos(): Promise<StudioVideosResponse> { return parseWithFallback(await this.fetch<unknown>("/api/youtube-studio/videos?limit=50"), StudioVideosSchema, EMPTY_STUDIO_VIDEOS, { endpoint: "GET /api/youtube-studio/videos" }); }
+  async getYoutubeStudioVideo(videoId: string): Promise<StudioVideoDetail> { return parseWithFallback(await this.fetch<unknown>(`/api/youtube-studio/videos/${encodeURIComponent(videoId)}`), StudioVideoDetailSchema, EMPTY_STUDIO_DETAIL, { endpoint: "GET /api/youtube-studio/videos/:id" }); }
+  async listYoutubeStudioVersions(videoId: string, artifactId: string): Promise<StudioVersionsResponse> { return parseWithFallback(await this.fetch<unknown>(`/api/youtube-studio/videos/${encodeURIComponent(videoId)}/artifacts/${encodeURIComponent(artifactId)}/versions?limit=20`), StudioVersionsSchema, EMPTY_STUDIO_VERSIONS, { endpoint: "GET /api/youtube-studio/versions" }); }
+  async getYoutubeStudioVersion(videoId: string, artifactId: string, versionId: string): Promise<StudioVersion> { return parseWithFallback(await this.fetch<unknown>(`/api/youtube-studio/videos/${encodeURIComponent(videoId)}/artifacts/${encodeURIComponent(artifactId)}/versions/${encodeURIComponent(versionId)}`), StudioVersionSchema, EMPTY_STUDIO_VERSION, { endpoint: "GET /api/youtube-studio/version" }); }
   async bindYoutubeStudio(videoId: string, issueId: string): Promise<StudioBindingResponse> { return this.fetch(`/api/youtube-studio/videos/${encodeURIComponent(videoId)}/markdown-bindings/${encodeURIComponent(issueId)}`, { method: "PUT", body: "{}" }); }
 
   async createProject(data: CreateProjectRequest): Promise<Project> {

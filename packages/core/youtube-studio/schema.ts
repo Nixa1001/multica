@@ -1,5 +1,10 @@
 import { z } from "zod";
+import type { StudioVideoDetail, StudioVideosResponse, StudioVersionsResponse, StudioVersion } from "../types/youtube-studio";
 export const StudioVideosSchema = z.object({ videos: z.array(z.object({ video_id: z.string(), name: z.string(), icon: z.string().nullable(), lifecycle_state: z.string(), material_count: z.number(), attention_count: z.number(), updated_at: z.string() })), next_cursor: z.string().nullable() });
 export const StudioVideoDetailSchema = z.object({ video_id: z.string(), name: z.string(), lifecycle_state: z.string(), materials: z.array(z.unknown()) });
 export const StudioVersionsSchema = z.object({ versions: z.array(z.unknown()), next_before_version: z.number().nullable() });
 export const StudioVersionSchema = z.object({ id: z.string(), artifact_id: z.string(), version_number: z.number(), content_kind: z.literal("markdown"), markdown: z.string(), sha256: z.string(), recorded_at: z.string(), provenance: z.record(z.string(), z.unknown()) });
+export const EMPTY_STUDIO_VIDEOS: StudioVideosResponse = { videos: [], next_cursor: null };
+export const EMPTY_STUDIO_DETAIL: StudioVideoDetail = { video_id: "", name: "", lifecycle_state: "active", materials: [] };
+export const EMPTY_STUDIO_VERSIONS: StudioVersionsResponse = { versions: [], next_before_version: null };
+export const EMPTY_STUDIO_VERSION: StudioVersion = { id: "", artifact_id: "", version_number: 0, content_kind: "markdown", markdown: "", sha256: "0".repeat(64), recorded_at: "", source_result_id: "", source_issue_id: "", source_task_id: "", provenance: { source_result_id: "", source_issue_id: "", source_task_id: "", producer: null } };
