@@ -35,7 +35,7 @@ vi.mock("@multica/core/projects/queries", () => ({ projectListOptions: () => ({ 
 vi.mock("@multica/core/youtube-studio", async (importOriginal) => ({ ...(await importOriginal<typeof import("@multica/core/youtube-studio")>()), youtubeStudioKeys: { all: () => [], versions: () => [] }, youtubeStudioVideosOptions: () => ({ queryKey: ["videos"] }), youtubeStudioVideoOptions: () => ({ queryKey: ["video-detail"] }), youtubeStudioVersionsOptions: () => ({ queryKey: ["versions"] }), youtubeStudioVersionOptions: (_ws: string, _video: string, _artifact: string, versionId: string) => ({ queryKey: ["version", versionId] }) }));
 vi.mock("@tanstack/react-query", () => ({
   useInfiniteQuery: (options: { queryKey?: string[] }) => options.queryKey?.[0] === "versions"
-    ? { isPending: versionsLoading, isError: versionsError, data: { pages: [{ versions: (versionPage === 1 ? [3, 2] : [1]).map((version_number) => ({ id: `version-${version_number}`, version_number, sha256: String(version_number).repeat(64).slice(0, 64), recorded_at: "2026-09-13T10:00:00Z", source_result_id: `result-${version_number}`, source_issue_id: "issue-1", source_task_id: `task-${version_number}` })), next_before_version: versionPage === 1 ? 1 : null }] }, hasNextPage: !versionsLoading && !versionsError && versionPage === 1, isFetchingNextPage: false, fetchNextPage, refetch: versionsRefetch }
+    ? { isPending: versionsLoading, isError: versionsError, data: { pages: (versionPage === 1 ? [[3, 2]] : [[3, 2], [1]]).map((page, index) => ({ versions: page.map((version_number) => ({ id: `version-${version_number}`, version_number, sha256: String(version_number).repeat(64).slice(0, 64), recorded_at: "2026-09-13T10:00:00Z", source_result_id: `result-${version_number}`, source_issue_id: "issue-1", source_task_id: `task-${version_number}` })), next_before_version: index === 0 && versionPage === 1 ? 1 : null })) }, hasNextPage: !versionsLoading && !versionsError && versionPage === 1, isFetchingNextPage: false, fetchNextPage, refetch: versionsRefetch }
     : { isPending: listMode === "loading", isError: listMode === "error", data: { pages: [{ videos: listMode === "empty" ? [] : videos, next_cursor: listMode === "ready" ? "cursor-2" : null }] }, hasNextPage: listMode === "ready", isFetchingNextPage: false, fetchNextPage, refetch },
   useQuery: (options: { queryKey?: string[] }) => options.queryKey?.[0] === "video-detail"
     ? { isPending: false, isError: false, data: { video_id: "video-1", name: "Episode one", lifecycle_state: "active", materials: [{ binding_id: "binding-1", artifact_id: "artifact-1", kind: "markdown", source_issue: null, source_state: "available", current_version: hasCurrentVersion ? { id: `version-${currentVersion}`, version_number: currentVersion, sha256: String(currentVersion).repeat(64).slice(0, 64), recorded_at: "2026-09-13T10:00:00Z", source_result_id: `result-${currentVersion}`, source_issue_id: "issue-1", source_task_id: `task-${currentVersion}` } : null, ingestion: { state: detailState, attempt_count: 1, next_attempt_at: null, failure_code: detailState === "failed" ? "projection_failed" : null } }] } }
@@ -146,27 +146,45 @@ describe("YouTube Studio rendered surface", () => {
 
   it("switches N to N+1, then preserves an explicit historical selection", async () => {
     const user = userEvent.setup();
+    currentVersion = 3;
     const view = render(<YoutubeStudioPage videoId="video-1" />);
-    expect(screen.getByText("# Immutable version-1")).toBeInTheDocument();
-    currentVersion = 2;
+    expect(screen.getByText("# Immutable version-3")).toBeInTheDocument();
+    expect(screen.getByText(/SHA-256/)).toHaveTextContent("3".repeat(64));
+    expect(screen.getByText(/Result result-3/)).toHaveTextContent("Task task-3");
+    currentVersion = 4;
     view.rerender(<YoutubeStudioPage videoId="video-1" />);
-    expect(screen.getByText("# Immutable version-2")).toBeInTheDocument();
+    expect(screen.getByText("# Immutable version-4")).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "youtube-studio.version" })).toHaveValue("version-4");
+    expect(screen.getByText(/SHA-256/)).toHaveTextContent("4".repeat(64));
+    expect(screen.getByText(/Result result-4/)).toHaveTextContent("Task task-4");
     fireEvent.click(screen.getByRole("button", { name: "youtube-studio.older_versions" }));
     view.rerender(<YoutubeStudioPage videoId="video-1" />);
     const versionSelect = screen.getByRole("combobox", { name: "youtube-studio.version" });
-    await user.selectOptions(versionSelect, "version-1");
-    currentVersion = 3;
+    await user.selectOptions(versionSelect, "version-3");
+    expect(screen.getByText("# Immutable version-3")).toBeInTheDocument();
+    expect(screen.getByText(/SHA-256/)).toHaveTextContent("3".repeat(64));
+    expect(screen.getByText(/Result result-3/)).toHaveTextContent("Task task-3");
+    currentVersion = 5;
     view.rerender(<YoutubeStudioPage videoId="video-1" />);
-    expect(screen.getByText("# Immutable version-1")).toBeInTheDocument();
+    expect(screen.getByText("# Immutable version-3")).toBeInTheDocument();
+    expect(versionSelect).toHaveValue("version-3");
+    expect(screen.getByText(/SHA-256/)).toHaveTextContent("3".repeat(64));
+    expect(screen.getByText(/Result result-3/)).toHaveTextContent("Task task-3");
   });
 
   it("renders versions pagination and its loading/error retry state", () => {
+    currentVersion = 3;
     const view = render(<YoutubeStudioPage videoId="video-1" />);
+    const versionSelect = screen.getByRole("combobox", { name: "youtube-studio.version" });
+    expect(versionSelect).toHaveValue("version-3");
+    expect(screen.queryByRole("option", { name: "1" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "youtube-studio.older_versions" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "youtube-studio.older_versions" }));
     expect(fetchNextPage).toHaveBeenCalled();
     view.rerender(<YoutubeStudioPage videoId="video-1" />);
-    expect(screen.getByRole("combobox", { name: "youtube-studio.version" })).toHaveValue("version-1");
+    expect(screen.getByRole("option", { name: "1" })).toBeInTheDocument();
+    expect(screen.getAllByRole("option")).toHaveLength(3);
+    expect(screen.getByRole("combobox", { name: "youtube-studio.version" })).toHaveValue("version-3");
     versionsLoading = true;
     const loadingView = render(<YoutubeStudioPage videoId="video-1" />);
     expect(screen.getByText("youtube-studio.immutable_loading")).toBeInTheDocument();
@@ -187,12 +205,15 @@ describe("YouTube Studio rendered surface", () => {
     view.unmount();
     emptyMarkdown = false;
     versionLoading = true;
-    render(<YoutubeStudioPage videoId="video-1" />);
+    const loadingView = render(<YoutubeStudioPage videoId="video-1" />);
     expect(screen.getAllByText("youtube-studio.immutable_loading").length).toBeGreaterThan(0);
     versionLoading = false;
     versionError = true;
+    loadingView.unmount();
     render(<YoutubeStudioPage videoId="video-1" />);
-    expect(screen.getAllByRole("alert").length).toBeGreaterThan(0);
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "youtube-studio.retry" }));
+    expect(versionRefetch).toHaveBeenCalledTimes(1);
     versionError = false;
   });
 });
