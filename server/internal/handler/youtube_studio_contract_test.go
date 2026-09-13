@@ -627,7 +627,7 @@ func TestYouTubeStudioBindParentDriftAfterProjectLockReturns404(t *testing.T) {
 		_, _ = testPool.Exec(ctx, `DELETE FROM project WHERE id IN ($1,$2)`, project, foreignProject)
 	})
 	clone := *testHandler
-	clone.YouTubeStudioBindAfterProjectLock = func() {
+	clone.YouTubeStudioBindAfterProjectLock = func(_ int32) {
 		if _, err := testPool.Exec(ctx, `UPDATE issue SET parent_issue_id=$1 WHERE id=$2`, parent, issue); err != nil {
 			t.Fatalf("drift update: %v", err)
 		}
@@ -662,11 +662,12 @@ func TestYouTubeStudioBindDeleteRaceLeavesNoOrphans(t *testing.T) {
 	})
 	deleteBefore := make(chan struct{})
 	deleteAcquired := make(chan struct{})
+	deletePID := make(chan int32, 1)
 	deleteDone := make(chan error, 1)
 	clone := *testHandler
-	clone.YouTubeStudioBindAfterProjectLock = func() {
+	clone.YouTubeStudioBindAfterProjectLock = func(putPID int32) {
 		go func() {
-			observer := &service.YouTubeStudioProjectLockObserver{Before: func(int32) { close(deleteBefore) }, Acquired: func(int32) { close(deleteAcquired) }}
+			observer := &service.YouTubeStudioProjectLockObserver{Before: func(pid int32) { deletePID <- pid; close(deleteBefore) }, Acquired: func(int32) { close(deleteAcquired) }}
 			req := withURLParam(newRequest(http.MethodDelete, "/api/projects/"+project, nil), "id", project)
 			req = req.WithContext(service.WithYouTubeStudioProjectLockObserver(req.Context(), observer))
 			w := httptest.NewRecorder()
@@ -678,6 +679,13 @@ func TestYouTubeStudioBindDeleteRaceLeavesNoOrphans(t *testing.T) {
 			}
 		}()
 		waitForChannel(t, deleteBefore, "delete FOR UPDATE attempt")
+		var pid int32
+		select {
+		case pid = <-deletePID:
+		case <-time.After(2 * time.Second):
+			t.Fatal("delete PID unavailable")
+		}
+		waitForPostgresLockWait(t, ctx, pid, putPID, "FOR UPDATE", 2*time.Second)
 		select {
 		case <-deleteAcquired:
 			t.Fatal("delete acquired FOR UPDATE before PUT released FOR KEY SHARE")

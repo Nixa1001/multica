@@ -88,7 +88,12 @@ func (h *Handler) YouTubeStudioBind(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.YouTubeStudioBindAfterProjectLock != nil {
-		h.YouTubeStudioBindAfterProjectLock()
+		var pid int32
+		if err = tx.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&pid); err != nil {
+			writeErrorCode(w, 500, "studio_bootstrap_failed", "Studio activation failed")
+			return
+		}
+		h.YouTubeStudioBindAfterProjectLock(pid)
 	}
 	var issueProject pgtype.UUID
 	var issueWorkspace pgtype.UUID

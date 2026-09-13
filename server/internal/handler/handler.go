@@ -196,7 +196,7 @@ type Handler struct {
 	TxStarter    txStarter
 	// YouTubeStudioBindAfterProjectLock is test-only instrumentation for
 	// deterministic transaction race coverage; nil in production.
-	YouTubeStudioBindAfterProjectLock func()
+	YouTubeStudioBindAfterProjectLock func(pid int32)
 	Hub                               *realtime.Hub
 	DaemonHub                         *daemonws.Hub
 	DaemonProfileRefresh              RuntimeProfileRefreshNotifier
