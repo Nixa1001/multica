@@ -1,0 +1,12 @@
+import { z } from "zod";
+import type { StudioVideoDetail, StudioVideosResponse, StudioVersionsResponse, StudioVersion } from "../types/youtube-studio";
+export const StudioVideosSchema = z.object({ videos: z.array(z.object({ video_id: z.string(), name: z.string(), icon: z.string().nullable(), lifecycle_state: z.string(), material_count: z.number(), attention_count: z.number(), updated_at: z.string() })), next_cursor: z.string().nullable() });
+const VersionSummary = z.object({ id:z.string(), version_number:z.number(), sha256:z.string().regex(/^[0-9a-f]{64}$/), recorded_at:z.string(), source_result_id:z.string(), source_issue_id:z.string(), source_task_id:z.string() });
+const Material = z.object({ binding_id:z.string(), artifact_id:z.string(), kind:z.literal("markdown"), source_issue:z.object({id:z.string(),identifier:z.string(),title:z.string(),status:z.string()}).nullable(), source_state:z.enum(["available","unavailable"]), current_version:VersionSummary.nullable(), ingestion:z.object({state:z.enum(["awaiting_result","processing","retrying","ready","failed"]),attempt_count:z.number(),next_attempt_at:z.string().nullable(),failure_code:z.string().nullable()}) });
+export const StudioVideoDetailSchema = z.object({ video_id: z.string(), name: z.string(), lifecycle_state: z.string(), materials: z.array(Material) });
+export const StudioVersionsSchema = z.object({ versions: z.array(VersionSummary), next_before_version: z.number().nullable() });
+export const StudioVersionSchema = VersionSummary.extend({ artifact_id:z.string(), content_kind:z.literal("markdown"), markdown:z.string(), provenance:z.object({source_result_id:z.string(),source_issue_id:z.string(),source_task_id:z.string(),producer:z.object({type:z.string(),id:z.string(),name:z.string()}).nullable()}) });
+export const EMPTY_STUDIO_VIDEOS: StudioVideosResponse = { videos: [], next_cursor: null };
+export const EMPTY_STUDIO_DETAIL: StudioVideoDetail = { video_id: "", name: "", lifecycle_state: "active", materials: [] };
+export const EMPTY_STUDIO_VERSIONS: StudioVersionsResponse = { versions: [], next_before_version: null };
+export const EMPTY_STUDIO_VERSION: StudioVersion = { id: "", artifact_id: "", version_number: 0, content_kind: "markdown", markdown: "", sha256: "0".repeat(64), recorded_at: "", source_result_id: "", source_issue_id: "", source_task_id: "", provenance: { source_result_id: "", source_issue_id: "", source_task_id: "", producer: null } };

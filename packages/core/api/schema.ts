@@ -53,3 +53,20 @@ export function parseWithFallback<T>(
   );
   return fallback;
 }
+
+export function parseWithSafeFallback<T>(data: unknown, schema: ZodType, fallback: T, opts: ParseOptions): T {
+  const result = schema.safeParse(data);
+  if (result.success) return result.data as T;
+  schemaLogger.warn(`API response failed schema validation: ${opts.endpoint}`, { endpoint: opts.endpoint, issues: result.error.issues.map(({ code, path, message }) => ({ code, path, message })) });
+  return fallback;
+}
+
+export function parseStudioResponse<T>(data: unknown, schema: ZodType, opts: ParseOptions): T {
+  const result = schema.safeParse(data);
+  if (result.success) return result.data as T;
+  schemaLogger.warn(`Studio API response failed schema validation: ${opts.endpoint}`, {
+    endpoint: opts.endpoint,
+    issues: result.error.issues.map(({ code, path, message }) => ({ code, path, message })),
+  });
+  throw new Error("Studio API returned an invalid response. Please retry.");
+}
