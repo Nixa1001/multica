@@ -223,7 +223,6 @@ import type {
   CreateCommentSubIssueRequest,
 } from "../types";
 import type { StudioVideosResponse, StudioVideoDetail, StudioVersionsResponse, StudioVersion, StudioBindingResponse } from "../types/youtube-studio";
-import type { StudioVideosResponse, StudioVideoDetail, StudioVersionsResponse, StudioVersion } from "../types/youtube-studio";
 import type { OnboardingCompletionPath } from "../onboarding/types";
 import type {
   CreateFeedbackResponse,
@@ -3568,22 +3567,6 @@ export class ApiClient {
   async listYoutubeStudioVersions(videoId: string, artifactId: string): Promise<StudioVersionsResponse> { return this.fetch(`/api/youtube-studio/videos/${encodeURIComponent(videoId)}/artifacts/${encodeURIComponent(artifactId)}/versions?limit=20`); }
   async getYoutubeStudioVersion(videoId: string, artifactId: string, versionId: string): Promise<StudioVersion> { return this.fetch(`/api/youtube-studio/videos/${encodeURIComponent(videoId)}/artifacts/${encodeURIComponent(artifactId)}/versions/${encodeURIComponent(versionId)}`); }
   async bindYoutubeStudio(videoId: string, issueId: string): Promise<StudioBindingResponse> { return this.fetch(`/api/youtube-studio/videos/${encodeURIComponent(videoId)}/markdown-bindings/${encodeURIComponent(issueId)}`, { method: "PUT", body: "{}" }); }
-
-  async listYoutubeStudioVideos(): Promise<StudioVideosResponse> {
-    return this.fetch("/api/youtube-studio/videos?limit=50");
-  }
-
-  async getYoutubeStudioVideo(videoId: string): Promise<StudioVideoDetail> {
-    return this.fetch(`/api/youtube-studio/videos/${encodeURIComponent(videoId)}`);
-  }
-
-  async listYoutubeStudioVersions(videoId: string, artifactId: string): Promise<StudioVersionsResponse> {
-    return this.fetch(`/api/youtube-studio/videos/${encodeURIComponent(videoId)}/artifacts/${encodeURIComponent(artifactId)}/versions?limit=20`);
-  }
-
-  async getYoutubeStudioVersion(videoId: string, artifactId: string, versionId: string): Promise<StudioVersion> {
-    return this.fetch(`/api/youtube-studio/videos/${encodeURIComponent(videoId)}/artifacts/${encodeURIComponent(artifactId)}/versions/${encodeURIComponent(versionId)}`);
-  }
 
   async createProject(data: CreateProjectRequest): Promise<Project> {
     return this.fetch("/api/projects", {
