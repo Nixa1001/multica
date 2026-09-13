@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -37,17 +38,56 @@ func TestYouTubeStudioBindRetryAndFirstRead(t *testing.T) {
 		_, _ = testPool.Exec(ctx, `DELETE FROM issue WHERE id=$1`, issue)
 		_, _ = testPool.Exec(ctx, `DELETE FROM project WHERE id=$1`, project)
 	})
+	type result struct {
+		status int
+		body   map[string]any
+	}
+	results := make(chan result, 2)
+	var wg sync.WaitGroup
 	for n := 0; n < 2; n++ {
-		req := youtubeHandlerURL(httptest.NewRequest(http.MethodPut, "/api/youtube-studio/videos/"+project+"/markdown-bindings/"+issue+"?workspace_id="+testWorkspaceID, nil), project, issue)
-		w := httptest.NewRecorder()
-		testHandler.YouTubeStudioBind(w, req)
-		want := http.StatusCreated
-		if n == 1 {
-			want = http.StatusOK
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			req := youtubeHandlerURL(httptest.NewRequest(http.MethodPut, "/api/youtube-studio/videos/"+project+"/markdown-bindings/"+issue+"?workspace_id="+testWorkspaceID, nil), project, issue)
+			w := httptest.NewRecorder()
+			testHandler.YouTubeStudioBind(w, req)
+			var body map[string]any
+			_ = json.Unmarshal(w.Body.Bytes(), &body)
+			results <- result{w.Code, body}
+		}()
+	}
+	wg.Wait()
+	close(results)
+	var created, okCount int
+	var bindingID, artifactID string
+	for got := range results {
+		if got.status == http.StatusCreated {
+			created++
 		}
-		if w.Code != want {
-			t.Fatalf("retry %d status=%d want %d: %s", n, w.Code, want, w.Body.String())
+		if got.status == http.StatusOK {
+			okCount++
 		}
+		binding, _ := got.body["binding"].(map[string]any)
+		if bindingID == "" {
+			bindingID, _ = binding["id"].(string)
+			artifactID, _ = binding["artifact_id"].(string)
+		} else {
+			otherID, _ := binding["id"].(string)
+			otherArtifact, _ := binding["artifact_id"].(string)
+			if otherID != bindingID || otherArtifact != artifactID {
+				t.Fatalf("concurrent retry returned different IDs")
+			}
+		}
+	}
+	if created != 1 || okCount != 1 {
+		t.Fatalf("concurrent statuses created=%d ok=%d want 1/1", created, okCount)
+	}
+	// A subsequent exact retry remains 200 and preserves the same binding.
+	req := youtubeHandlerURL(httptest.NewRequest(http.MethodPut, "/api/youtube-studio/videos/"+project+"/markdown-bindings/"+issue+"?workspace_id="+testWorkspaceID, nil), project, issue)
+	w := httptest.NewRecorder()
+	testHandler.YouTubeStudioBind(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("sequential retry status=%d want 200", w.Code)
 	}
 	var profiles, artifacts, bindings int
 	if err := testPool.QueryRow(ctx, `SELECT (SELECT count(*) FROM youtube_video_project WHERE project_id=$1),(SELECT count(*) FROM youtube_artifact WHERE project_id=$1),(SELECT count(*) FROM youtube_issue_binding WHERE issue_id=$2)`, project, issue).Scan(&profiles, &artifacts, &bindings); err != nil {
@@ -56,7 +96,7 @@ func TestYouTubeStudioBindRetryAndFirstRead(t *testing.T) {
 	if profiles != 1 || artifacts != 1 || bindings != 1 {
 		t.Fatalf("rows=%d/%d/%d want 1/1/1", profiles, artifacts, bindings)
 	}
-	w := httptest.NewRecorder()
+	w = httptest.NewRecorder()
 	testHandler.YouTubeStudioVideo(w, youtubeHandlerURL(httptest.NewRequest(http.MethodGet, "/api/youtube-studio/videos/"+project+"?workspace_id="+testWorkspaceID, nil), project, issue))
 	if w.Code != http.StatusOK {
 		t.Fatalf("detail status=%d: %s", w.Code, w.Body.String())
