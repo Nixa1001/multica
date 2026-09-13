@@ -74,10 +74,10 @@ describe("YouTube Studio rendered surface", () => {
     mutationError = true;
     render(<YoutubeStudioPage />);
     const selects = screen.getAllByRole("combobox");
-    fireEvent.change(selects[0], { target: { value: "project-1" } });
-    fireEvent.change(selects[1], { target: { value: "issue-1" } });
-    fireEvent.change(selects[0], { target: { value: "project-2" } });
-    expect(selects[1]).toHaveValue("");
+    fireEvent.change(selects[0]!, { target: { value: "project-1" } });
+    fireEvent.change(selects[1]!, { target: { value: "issue-1" } });
+    fireEvent.change(selects[0]!, { target: { value: "project-2" } });
+    expect(selects[1]!).toHaveValue("");
     expect(screen.getByRole("alert")).toBeInTheDocument();
     mutationError = false;
   });
