@@ -502,13 +502,101 @@ func TestYouTubeStudioBindDatabaseFaultsReturn500AndRollback(t *testing.T) {
 }
 
 func TestYouTubeStudioVideoRowsErrorReturns500WithoutPartialSuccess(t *testing.T) {
+	project, issue, artifact := seedYouTubeHTTPReadFixture(t, "rows-detail")
+	defer cleanupYouTubeHTTPReadFixture(t, project, issue, artifact)
 	clone := *testHandler
 	clone.DB = youtubeRowsFaultDB{dbExecutor: testPool}
-	req := httptest.NewRequest(http.MethodGet, "/api/youtube-studio/videos?workspace_id="+testWorkspaceID, nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/youtube-studio/videos/"+project+"?workspace_id="+testWorkspaceID, nil)
+	req = youtubeHandlerURL(req, project, issue)
 	w := httptest.NewRecorder()
-	clone.YouTubeStudioVideos(w, req)
+	clone.YouTubeStudioVideo(w, req)
 	if w.Code != http.StatusInternalServerError {
-		t.Fatalf("status=%d want 500: %s", w.Code, w.Body.String())
+		t.Fatalf("detail status=%d want 500: %s", w.Code, w.Body.String())
+	}
+	if _, err := testPool.Exec(context.Background(), `INSERT INTO youtube_artifact_version(workspace_id,artifact_id,version_number,source_result_id,source_issue_id,source_task_id,markdown,sha256,recorded_at) VALUES($1,$2,1,gen_random_uuid(),$3,gen_random_uuid(),'rows fixture',repeat('c',64),now())`, testWorkspaceID, artifact, issue); err != nil {
+		t.Fatal(err)
+	}
+	w = httptest.NewRecorder()
+	path := "/api/youtube-studio/videos/" + project + "/artifacts/" + artifact + "/versions?workspace_id=" + testWorkspaceID
+	clone.YouTubeStudioVersions(w, youtubeVersionURL(httptest.NewRequest(http.MethodGet, path, nil), project, artifact))
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("versions status=%d want 500: %s", w.Code, w.Body.String())
+	}
+}
+
+func seedYouTubeHTTPReadFixture(t *testing.T, key string) (project, issue, artifact string) {
+	t.Helper()
+	ctx := context.Background()
+	if err := testPool.QueryRow(ctx, `INSERT INTO project(workspace_id,title) VALUES($1,$2) RETURNING id`, testWorkspaceID, "HTTP "+key).Scan(&project); err != nil {
+		t.Fatal(err)
+	}
+	if err := testPool.QueryRow(ctx, `INSERT INTO issue(workspace_id,project_id,title,status,creator_type,creator_id,number) VALUES($1,$2,$3,'in_progress','member',$4,950000001) RETURNING id`, testWorkspaceID, project, key, testUserID).Scan(&issue); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testPool.Exec(ctx, `INSERT INTO youtube_video_project(workspace_id,project_id) VALUES($1,$2)`, testWorkspaceID, project); err != nil {
+		t.Fatal(err)
+	}
+	if err := testPool.QueryRow(ctx, `INSERT INTO youtube_artifact(workspace_id,project_id,artifact_key) VALUES($1,$2,$3) RETURNING id`, testWorkspaceID, project, key).Scan(&artifact); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testPool.Exec(ctx, `INSERT INTO youtube_issue_binding(workspace_id,project_id,issue_id,artifact_key,kind) VALUES($1,$2,$3,$4,'markdown')`, testWorkspaceID, project, issue, key); err != nil {
+		t.Fatal(err)
+	}
+	return
+}
+
+func cleanupYouTubeHTTPReadFixture(t *testing.T, project, issue, artifact string) {
+	t.Helper()
+	ctx := context.Background()
+	_, _ = testPool.Exec(ctx, `DELETE FROM youtube_studio_outbox WHERE result_id IN (SELECT id FROM youtube_issue_result WHERE project_id=$1)`, project)
+	_, _ = testPool.Exec(ctx, `DELETE FROM youtube_issue_result WHERE project_id=$1`, project)
+	_, _ = testPool.Exec(ctx, `DELETE FROM youtube_artifact_version WHERE artifact_id=$1`, artifact)
+	_, _ = testPool.Exec(ctx, `DELETE FROM youtube_artifact WHERE id=$1`, artifact)
+	_, _ = testPool.Exec(ctx, `DELETE FROM youtube_issue_binding WHERE project_id=$1`, project)
+	_, _ = testPool.Exec(ctx, `DELETE FROM youtube_video_project WHERE project_id=$1`, project)
+	_, _ = testPool.Exec(ctx, `DELETE FROM issue WHERE id=$1`, issue)
+	_, _ = testPool.Exec(ctx, `DELETE FROM project WHERE id=$1`, project)
+}
+
+func TestYouTubeStudioBindParentMismatchReturns404WithoutWrites(t *testing.T) {
+	ctx := context.Background()
+	var project, foreignProject, parent, child string
+	if err := testPool.QueryRow(ctx, `INSERT INTO project(workspace_id,title) VALUES($1,'HTTP parent target'),($1,'HTTP parent foreign') RETURNING id`, testWorkspaceID).Scan(&project); err != nil {
+		t.Fatal(err)
+	}
+	if err := testPool.QueryRow(ctx, `SELECT id FROM project WHERE workspace_id=$1 AND title='HTTP parent foreign' ORDER BY created_at DESC LIMIT 1`, testWorkspaceID).Scan(&foreignProject); err != nil {
+		t.Fatal(err)
+	}
+	if err := testPool.QueryRow(ctx, `INSERT INTO issue(workspace_id,project_id,title,status,creator_type,creator_id,number) VALUES($1,$2,'foreign parent','in_progress','member',$3,960000001) RETURNING id`, testWorkspaceID, foreignProject, testUserID).Scan(&parent); err != nil {
+		t.Fatal(err)
+	}
+	if err := testPool.QueryRow(ctx, `INSERT INTO issue(workspace_id,project_id,parent_issue_id,title,status,creator_type,creator_id,number) VALUES($1,$2,$3,'child','in_progress','member',$4,960000002) RETURNING id`, testWorkspaceID, project, parent, testUserID).Scan(&child); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(ctx, `DELETE FROM issue WHERE id IN ($1,$2)`, parent, child)
+		_, _ = testPool.Exec(ctx, `DELETE FROM project WHERE id IN ($1,$2)`, project, foreignProject)
+	})
+	req := youtubeHandlerURL(httptest.NewRequest(http.MethodPut, "/api/youtube-studio/videos/"+project+"/markdown-bindings/"+child+"?workspace_id="+testWorkspaceID, nil), project, child)
+	w := httptest.NewRecorder()
+	testHandler.YouTubeStudioBind(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status=%d want 404: %s", w.Code, w.Body.String())
+	}
+	var profiles, artifacts, bindings int
+	if err := testPool.QueryRow(ctx, `SELECT (SELECT count(*) FROM youtube_video_project WHERE project_id=$1),(SELECT count(*) FROM youtube_artifact WHERE project_id=$1),(SELECT count(*) FROM youtube_issue_binding WHERE project_id=$1)`, project).Scan(&profiles, &artifacts, &bindings); err != nil {
+		t.Fatal(err)
+	}
+	if profiles != 0 || artifacts != 0 || bindings != 0 {
+		t.Fatalf("parent mismatch wrote rows=%d/%d/%d", profiles, artifacts, bindings)
+	}
+}
+
+func TestYouTubeStudioBindingKindSchemaRejectsNonMarkdown(t *testing.T) {
+	ctx := context.Background()
+	_, err := testPool.Exec(ctx, `INSERT INTO youtube_issue_binding(workspace_id,project_id,issue_id,artifact_key,kind) VALUES($1,$2,$3,'schema-kind','image')`, testWorkspaceID, testWorkspaceID, testUserID)
+	if err == nil || !strings.Contains(err.Error(), "youtube_issue_binding_kind_check") {
+		t.Fatalf("kind constraint error=%v", err)
 	}
 }
 
