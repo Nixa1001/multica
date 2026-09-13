@@ -236,6 +236,371 @@ func (q *Queries) GetYouTubeStudioBackendPID(ctx context.Context) (int32, error)
 	return pg_backend_pid, err
 }
 
+const getYouTubeStudioBinding = `-- name: GetYouTubeStudioBinding :one
+SELECT b.id, b.workspace_id, b.project_id, b.issue_id, b.artifact_key, b.kind, b.active, b.created_at,
+       a.id AS artifact_id
+FROM youtube_issue_binding b
+JOIN youtube_artifact a ON a.workspace_id = b.workspace_id AND a.project_id = b.project_id AND a.artifact_key = b.artifact_key
+WHERE b.workspace_id = $1 AND b.project_id = $2 AND b.issue_id = $3 AND b.active
+`
+
+type GetYouTubeStudioBindingParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ProjectID   pgtype.UUID `json:"project_id"`
+	IssueID     pgtype.UUID `json:"issue_id"`
+}
+
+type GetYouTubeStudioBindingRow struct {
+	ID          pgtype.UUID        `json:"id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	ProjectID   pgtype.UUID        `json:"project_id"`
+	IssueID     pgtype.UUID        `json:"issue_id"`
+	ArtifactKey string             `json:"artifact_key"`
+	Kind        string             `json:"kind"`
+	Active      bool               `json:"active"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	ArtifactID  pgtype.UUID        `json:"artifact_id"`
+}
+
+func (q *Queries) GetYouTubeStudioBinding(ctx context.Context, arg GetYouTubeStudioBindingParams) (GetYouTubeStudioBindingRow, error) {
+	row := q.db.QueryRow(ctx, getYouTubeStudioBinding, arg.WorkspaceID, arg.ProjectID, arg.IssueID)
+	var i GetYouTubeStudioBindingRow
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.ProjectID,
+		&i.IssueID,
+		&i.ArtifactKey,
+		&i.Kind,
+		&i.Active,
+		&i.CreatedAt,
+		&i.ArtifactID,
+	)
+	return i, err
+}
+
+const getYouTubeStudioProducer = `-- name: GetYouTubeStudioProducer :one
+SELECT a.id, a.name FROM agent_task_queue t JOIN agent a ON a.id=t.agent_id AND a.workspace_id=$1
+WHERE t.id=$2 AND t.workspace_id=$1
+`
+
+type GetYouTubeStudioProducerParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	TaskID      pgtype.UUID `json:"task_id"`
+}
+
+type GetYouTubeStudioProducerRow struct {
+	ID   pgtype.UUID `json:"id"`
+	Name string      `json:"name"`
+}
+
+func (q *Queries) GetYouTubeStudioProducer(ctx context.Context, arg GetYouTubeStudioProducerParams) (GetYouTubeStudioProducerRow, error) {
+	row := q.db.QueryRow(ctx, getYouTubeStudioProducer, arg.WorkspaceID, arg.TaskID)
+	var i GetYouTubeStudioProducerRow
+	err := row.Scan(&i.ID, &i.Name)
+	return i, err
+}
+
+const getYouTubeStudioVersion = `-- name: GetYouTubeStudioVersion :one
+SELECT v.id, v.artifact_id, v.version_number, v.markdown, v.sha256, v.recorded_at,
+       v.source_result_id, v.source_issue_id, v.source_task_id, a.project_id
+FROM youtube_artifact_version v JOIN youtube_artifact a ON a.id=v.artifact_id AND a.workspace_id=v.workspace_id
+WHERE v.workspace_id=$1 AND a.project_id=$2 AND v.artifact_id=$3 AND v.id=$4
+`
+
+type GetYouTubeStudioVersionParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ProjectID   pgtype.UUID `json:"project_id"`
+	ArtifactID  pgtype.UUID `json:"artifact_id"`
+	VersionID   pgtype.UUID `json:"version_id"`
+}
+
+type GetYouTubeStudioVersionRow struct {
+	ID             pgtype.UUID        `json:"id"`
+	ArtifactID     pgtype.UUID        `json:"artifact_id"`
+	VersionNumber  int32              `json:"version_number"`
+	Markdown       string             `json:"markdown"`
+	Sha256         string             `json:"sha256"`
+	RecordedAt     pgtype.Timestamptz `json:"recorded_at"`
+	SourceResultID pgtype.UUID        `json:"source_result_id"`
+	SourceIssueID  pgtype.UUID        `json:"source_issue_id"`
+	SourceTaskID   pgtype.UUID        `json:"source_task_id"`
+	ProjectID      pgtype.UUID        `json:"project_id"`
+}
+
+func (q *Queries) GetYouTubeStudioVersion(ctx context.Context, arg GetYouTubeStudioVersionParams) (GetYouTubeStudioVersionRow, error) {
+	row := q.db.QueryRow(ctx, getYouTubeStudioVersion,
+		arg.WorkspaceID,
+		arg.ProjectID,
+		arg.ArtifactID,
+		arg.VersionID,
+	)
+	var i GetYouTubeStudioVersionRow
+	err := row.Scan(
+		&i.ID,
+		&i.ArtifactID,
+		&i.VersionNumber,
+		&i.Markdown,
+		&i.Sha256,
+		&i.RecordedAt,
+		&i.SourceResultID,
+		&i.SourceIssueID,
+		&i.SourceTaskID,
+		&i.ProjectID,
+	)
+	return i, err
+}
+
+const getYouTubeStudioVideo = `-- name: GetYouTubeStudioVideo :one
+SELECT v.project_id AS video_id, p.title AS name, v.lifecycle_state
+FROM youtube_video_project v JOIN project p ON p.id = v.project_id AND p.workspace_id = v.workspace_id
+WHERE v.workspace_id = $1 AND v.project_id = $2
+`
+
+type GetYouTubeStudioVideoParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ProjectID   pgtype.UUID `json:"project_id"`
+}
+
+type GetYouTubeStudioVideoRow struct {
+	VideoID        pgtype.UUID `json:"video_id"`
+	Name           string      `json:"name"`
+	LifecycleState string      `json:"lifecycle_state"`
+}
+
+func (q *Queries) GetYouTubeStudioVideo(ctx context.Context, arg GetYouTubeStudioVideoParams) (GetYouTubeStudioVideoRow, error) {
+	row := q.db.QueryRow(ctx, getYouTubeStudioVideo, arg.WorkspaceID, arg.ProjectID)
+	var i GetYouTubeStudioVideoRow
+	err := row.Scan(&i.VideoID, &i.Name, &i.LifecycleState)
+	return i, err
+}
+
+const listYouTubeStudioMaterials = `-- name: ListYouTubeStudioMaterials :many
+SELECT b.id AS binding_id, a.id AS artifact_id, b.kind, b.issue_id, i.number AS issue_number,
+       i.title AS issue_title, i.status AS issue_status, i.workspace_id AS issue_workspace_id,
+       (SELECT issue_prefix FROM workspace WHERE id=b.workspace_id) AS issue_prefix,
+       r.id AS latest_result_id, r.recorded_at AS latest_result_at,
+       v.id AS current_version_id, v.version_number AS current_version_number, v.sha256 AS current_sha256, v.recorded_at AS current_recorded_at,
+       CASE WHEN v.id IS NOT NULL THEN 'available' ELSE 'unavailable' END AS source_state,
+       CASE WHEN v.id IS NOT NULL THEN 'ready' WHEN r.id IS NOT NULL THEN 'processing' ELSE 'awaiting_result' END AS ingestion_state,
+       1::int AS attempt_count, NULL::timestamptz AS next_attempt_at, NULL::text AS failure_code
+FROM youtube_issue_binding b
+JOIN youtube_artifact a ON a.workspace_id=b.workspace_id AND a.project_id=b.project_id AND a.artifact_key=b.artifact_key
+LEFT JOIN issue i ON i.id=b.issue_id AND i.workspace_id=b.workspace_id AND i.project_id=b.project_id
+LEFT JOIN LATERAL (SELECT r.id, r.event_id, r.workspace_id, r.project_id, r.binding_id, r.artifact_id, r.source_issue_id, r.source_task_id, r.markdown, r.sha256, r.recorded_at FROM youtube_issue_result r WHERE r.workspace_id=b.workspace_id AND r.binding_id=b.id ORDER BY r.recorded_at DESC LIMIT 1) r ON true
+LEFT JOIN youtube_artifact_version v ON v.artifact_id=a.id AND v.version_number=a.current_version_number
+WHERE b.workspace_id=$1 AND b.project_id=$2 AND b.active
+ORDER BY b.created_at ASC, b.id ASC
+`
+
+type ListYouTubeStudioMaterialsParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ProjectID   pgtype.UUID `json:"project_id"`
+}
+
+type ListYouTubeStudioMaterialsRow struct {
+	BindingID            pgtype.UUID        `json:"binding_id"`
+	ArtifactID           pgtype.UUID        `json:"artifact_id"`
+	Kind                 string             `json:"kind"`
+	IssueID              pgtype.UUID        `json:"issue_id"`
+	IssueNumber          pgtype.Int4        `json:"issue_number"`
+	IssueTitle           pgtype.Text        `json:"issue_title"`
+	IssueStatus          pgtype.Text        `json:"issue_status"`
+	IssueWorkspaceID     pgtype.UUID        `json:"issue_workspace_id"`
+	IssuePrefix          string             `json:"issue_prefix"`
+	LatestResultID       pgtype.UUID        `json:"latest_result_id"`
+	LatestResultAt       pgtype.Timestamptz `json:"latest_result_at"`
+	CurrentVersionID     pgtype.UUID        `json:"current_version_id"`
+	CurrentVersionNumber pgtype.Int4        `json:"current_version_number"`
+	CurrentSha256        pgtype.Text        `json:"current_sha256"`
+	CurrentRecordedAt    pgtype.Timestamptz `json:"current_recorded_at"`
+	SourceState          string             `json:"source_state"`
+	IngestionState       string             `json:"ingestion_state"`
+	AttemptCount         int32              `json:"attempt_count"`
+	NextAttemptAt        pgtype.Timestamptz `json:"next_attempt_at"`
+	FailureCode          pgtype.Text        `json:"failure_code"`
+}
+
+func (q *Queries) ListYouTubeStudioMaterials(ctx context.Context, arg ListYouTubeStudioMaterialsParams) ([]ListYouTubeStudioMaterialsRow, error) {
+	rows, err := q.db.Query(ctx, listYouTubeStudioMaterials, arg.WorkspaceID, arg.ProjectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListYouTubeStudioMaterialsRow{}
+	for rows.Next() {
+		var i ListYouTubeStudioMaterialsRow
+		if err := rows.Scan(
+			&i.BindingID,
+			&i.ArtifactID,
+			&i.Kind,
+			&i.IssueID,
+			&i.IssueNumber,
+			&i.IssueTitle,
+			&i.IssueStatus,
+			&i.IssueWorkspaceID,
+			&i.IssuePrefix,
+			&i.LatestResultID,
+			&i.LatestResultAt,
+			&i.CurrentVersionID,
+			&i.CurrentVersionNumber,
+			&i.CurrentSha256,
+			&i.CurrentRecordedAt,
+			&i.SourceState,
+			&i.IngestionState,
+			&i.AttemptCount,
+			&i.NextAttemptAt,
+			&i.FailureCode,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listYouTubeStudioVersions = `-- name: ListYouTubeStudioVersions :many
+SELECT v.id, v.artifact_id, v.version_number, v.sha256, v.recorded_at, v.source_result_id, v.source_issue_id, v.source_task_id
+FROM youtube_artifact_version v JOIN youtube_artifact a ON a.id=v.artifact_id AND a.workspace_id=v.workspace_id
+WHERE v.workspace_id=$1 AND v.artifact_id=$2
+  AND ($3::int IS NULL OR v.version_number < $3::int)
+ORDER BY v.version_number DESC LIMIT $4
+`
+
+type ListYouTubeStudioVersionsParams struct {
+	WorkspaceID   pgtype.UUID `json:"workspace_id"`
+	ArtifactID    pgtype.UUID `json:"artifact_id"`
+	BeforeVersion pgtype.Int4 `json:"before_version"`
+	RowLimit      int32       `json:"row_limit"`
+}
+
+type ListYouTubeStudioVersionsRow struct {
+	ID             pgtype.UUID        `json:"id"`
+	ArtifactID     pgtype.UUID        `json:"artifact_id"`
+	VersionNumber  int32              `json:"version_number"`
+	Sha256         string             `json:"sha256"`
+	RecordedAt     pgtype.Timestamptz `json:"recorded_at"`
+	SourceResultID pgtype.UUID        `json:"source_result_id"`
+	SourceIssueID  pgtype.UUID        `json:"source_issue_id"`
+	SourceTaskID   pgtype.UUID        `json:"source_task_id"`
+}
+
+func (q *Queries) ListYouTubeStudioVersions(ctx context.Context, arg ListYouTubeStudioVersionsParams) ([]ListYouTubeStudioVersionsRow, error) {
+	rows, err := q.db.Query(ctx, listYouTubeStudioVersions,
+		arg.WorkspaceID,
+		arg.ArtifactID,
+		arg.BeforeVersion,
+		arg.RowLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListYouTubeStudioVersionsRow{}
+	for rows.Next() {
+		var i ListYouTubeStudioVersionsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ArtifactID,
+			&i.VersionNumber,
+			&i.Sha256,
+			&i.RecordedAt,
+			&i.SourceResultID,
+			&i.SourceIssueID,
+			&i.SourceTaskID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listYouTubeStudioVideos = `-- name: ListYouTubeStudioVideos :many
+SELECT v.project_id AS video_id, p.title AS name, p.icon, v.lifecycle_state,
+       count(b.id)::bigint AS material_count, 0::bigint AS attention_count, v.updated_at
+FROM youtube_video_project v
+JOIN project p ON p.id = v.project_id AND p.workspace_id = v.workspace_id
+LEFT JOIN youtube_issue_binding b ON b.workspace_id = v.workspace_id AND b.project_id = v.project_id AND b.active
+WHERE v.workspace_id = $1
+  AND ($2::timestamptz IS NULL OR (v.updated_at, v.project_id) < ($2::timestamptz, $3::uuid))
+GROUP BY v.project_id, p.title, p.icon, v.lifecycle_state, v.updated_at
+ORDER BY v.updated_at DESC, v.project_id DESC
+LIMIT $4
+`
+
+type ListYouTubeStudioVideosParams struct {
+	WorkspaceID     pgtype.UUID        `json:"workspace_id"`
+	BeforeUpdatedAt pgtype.Timestamptz `json:"before_updated_at"`
+	BeforeVideoID   pgtype.UUID        `json:"before_video_id"`
+	RowLimit        int32              `json:"row_limit"`
+}
+
+type ListYouTubeStudioVideosRow struct {
+	VideoID        pgtype.UUID        `json:"video_id"`
+	Name           string             `json:"name"`
+	Icon           pgtype.Text        `json:"icon"`
+	LifecycleState string             `json:"lifecycle_state"`
+	MaterialCount  int64              `json:"material_count"`
+	AttentionCount int64              `json:"attention_count"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+}
+
+func (q *Queries) ListYouTubeStudioVideos(ctx context.Context, arg ListYouTubeStudioVideosParams) ([]ListYouTubeStudioVideosRow, error) {
+	rows, err := q.db.Query(ctx, listYouTubeStudioVideos,
+		arg.WorkspaceID,
+		arg.BeforeUpdatedAt,
+		arg.BeforeVideoID,
+		arg.RowLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListYouTubeStudioVideosRow{}
+	for rows.Next() {
+		var i ListYouTubeStudioVideosRow
+		if err := rows.Scan(
+			&i.VideoID,
+			&i.Name,
+			&i.Icon,
+			&i.LifecycleState,
+			&i.MaterialCount,
+			&i.AttentionCount,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const lockProjectForYouTubeStudioBinding = `-- name: LockProjectForYouTubeStudioBinding :one
+SELECT id FROM project WHERE id = $1 AND workspace_id = $2 FOR KEY SHARE
+`
+
+type LockProjectForYouTubeStudioBindingParams struct {
+	ProjectID   pgtype.UUID `json:"project_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) LockProjectForYouTubeStudioBinding(ctx context.Context, arg LockProjectForYouTubeStudioBindingParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, lockProjectForYouTubeStudioBinding, arg.ProjectID, arg.WorkspaceID)
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
 const markYouTubeStudioEventConsumed = `-- name: MarkYouTubeStudioEventConsumed :exec
 UPDATE youtube_studio_outbox SET consumed_at = now(), lease_token = NULL,
     attempt_count = attempt_count + 1, last_error = NULL, updated_at = now()
