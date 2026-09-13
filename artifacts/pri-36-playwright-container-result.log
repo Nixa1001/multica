@@ -1,0 +1,18 @@
+PRI-36 browser harness run (2026-09-13)
+
+Command:
+PLAYWRIGHT_CONTAINER_IMAGE=mcr.microsoft.com/playwright:v1.58.2-noble node scripts/run-youtube-studio-live.mjs
+
+Isolated browser image: mcr.microsoft.com/playwright:v1.58.2-noble
+Image digest: sha256:6446946a1d9fd62d9ae501312a2d76a43ee688542b21622056a372959b65d63d
+Container Node: v24.13.0
+Host services: disposable PostgreSQL container, Go API, and Next dev server; readiness passed.
+
+Result:
+- real ApiClient pagination/hash/provenance regression: PASS
+- authenticated browser route: FAIL
+- Browser starts in the container (no host libnspr4.so dependency).
+- API detail returned HTTP 200, but the UI rendered youtube-studio.load_failed; the response reported ingestion state processing and the page never exposed version 21.
+- No genuine completion/worker-to-ready transition was proven; the fixture still inserts completed rows/results directly.
+
+The runner stops its process groups and removes only its named disposable database/browser containers.
