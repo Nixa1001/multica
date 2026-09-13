@@ -4,10 +4,22 @@ import { configStore } from "../config";
 import type { StorageAdapter, User } from "../types";
 import { ApiClient, ApiError, CHAT_DRAFT_RESTORE_CAPABILITY, clientErrorMessage } from "./client";
 import { EMPTY_PLUGIN_PACKAGE_LIST, EMPTY_PLUGIN_PREVIEW, EMPTY_PLUGIN_SURFACE_LAUNCH } from "./schemas";
+import type { Logger } from "../logger";
 
 afterEach(() => {
   configStore.getState().setAgentConversationStartersSupported(false);
   vi.unstubAllGlobals();
+});
+
+describe("YouTube Studio API contract boundary", () => {
+  it("rejects malformed responses and never logs the raw payload", async () => {
+    const rawMarkdown = "# private draft";
+    const warn = vi.fn();
+    const logger: Logger = { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ videos: [{ markdown: rawMarkdown }] }), { status: 200 })));
+    await expect(new ApiClient("https://api.example.test", { logger }).listYoutubeStudioVideos()).rejects.toThrow(/invalid response/i);
+    expect(JSON.stringify(warn.mock.calls)).not.toContain(rawMarkdown);
+  });
 });
 
 describe("ApiClient agent conversation-starter compatibility", () => {
