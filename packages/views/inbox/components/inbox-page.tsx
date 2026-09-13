@@ -29,6 +29,9 @@ import {
   deduplicateArchivedInboxItems,
   useInboxUnreadCount,
 } from "@multica/core/inbox/queries";
+import { useInboxGroupingStore } from "@multica/core/inbox/grouping-store";
+import { issueListByIdsOptions } from "@multica/core/issues/queries";
+import { projectListOptions } from "@multica/core/projects/queries";
 import {
   useMarkInboxRead,
   useMarkInboxUnread,
@@ -79,6 +82,7 @@ import {
   DropdownMenuTrigger,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuCheckboxItem,
   DropdownMenuSeparator,
 } from "@multica/ui/components/ui/dropdown-menu";
 import { useIsCompact } from "@multica/ui/hooks/use-mobile";
@@ -99,6 +103,7 @@ import {
 import { AutopilotQuotaNotice } from "./autopilot-quota-notice";
 import { useT } from "../../i18n";
 import { useIssueLimitUpgradePrompt } from "../../modals/use-issue-limit-upgrade-prompt";
+import { groupInboxItemsByProject } from "./inbox-project-grouping";
 
 export function InboxPage() {
   const { t } = useT("inbox");
@@ -142,6 +147,19 @@ export function InboxPage() {
 
   const isArchivedView = view === "archived";
   const viewItems = isArchivedView ? archivedItems : items;
+  const groupByProject = useInboxGroupingStore((state) => state.groupByProject);
+  const setGroupByProject = useInboxGroupingStore((state) => state.setGroupByProject);
+  const issueIds = useMemo(
+    () => viewItems.flatMap((item) => (item.issue_id ? [item.issue_id] : [])),
+    [viewItems],
+  );
+  const { data: groupedIssues = [], isLoading: groupedIssuesLoading } = useQuery(
+    issueListByIdsOptions(wsId, groupByProject ? issueIds : []),
+  );
+  const { data: projects = [] } = useQuery({
+    ...projectListOptions(wsId),
+    enabled: groupByProject,
+  });
   const filters = useInboxFilters(wsId);
   const clearFilters = useInboxFilterStore((state) => state.clearFilters);
   // Active and archived endpoints return the same row contract and are both
@@ -159,6 +177,16 @@ export function InboxPage() {
   const visibleItems = useMemo(
     () => filterInboxItems(viewItems, effectiveFilters),
     [viewItems, effectiveFilters],
+  );
+  const projectGroups = useMemo(
+    () =>
+      groupByProject && !groupedIssuesLoading
+        ? groupInboxItemsByProject(visibleItems, groupedIssues, projects, {
+            withoutProject: t(($) => $.list.without_project),
+            unknownProject: t(($) => $.list.unknown_project),
+          })
+        : undefined,
+    [groupByProject, groupedIssuesLoading, visibleItems, groupedIssues, projects, t],
   );
   const hasActiveFilters = inboxFilterCount(effectiveFilters) > 0;
 
@@ -539,7 +567,6 @@ export function InboxPage() {
       {/* Batch actions are main-view only. Every entry archives from the MAIN
           inbox, so offering them while the archived list is on screen reads as
           "archive all of these" and does the opposite of what it looks like. */}
-      {!isArchivedView && (
       <DropdownMenu>
         <DropdownMenuTrigger
           render={
@@ -553,26 +580,35 @@ export function InboxPage() {
           <MoreHorizontal className="h-4 w-4" />
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-auto">
-          <DropdownMenuItem onClick={handleMarkAllRead}>
-            <CheckCheck className="h-4 w-4" />
-            {t(($) => $.menu.mark_all_read)}
-          </DropdownMenuItem>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem onClick={handleArchiveAll}>
-            <Archive className="h-4 w-4" />
-            {t(($) => $.menu.archive_all)}
-          </DropdownMenuItem>
-          <DropdownMenuItem onClick={handleArchiveAllRead}>
-            <BookCheck className="h-4 w-4" />
-            {t(($) => $.menu.archive_all_read)}
-          </DropdownMenuItem>
-          <DropdownMenuItem onClick={handleArchiveCompleted}>
-            <ListChecks className="h-4 w-4" />
-            {t(($) => $.menu.archive_completed)}
-          </DropdownMenuItem>
+          <DropdownMenuCheckboxItem
+            checked={groupByProject}
+            onCheckedChange={setGroupByProject}
+          >
+            {t(($) => $.menu.group_by_project)}
+          </DropdownMenuCheckboxItem>
+          {!isArchivedView && (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={handleMarkAllRead}>
+                <CheckCheck className="h-4 w-4" />
+                {t(($) => $.menu.mark_all_read)}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={handleArchiveAll}>
+                <Archive className="h-4 w-4" />
+                {t(($) => $.menu.archive_all)}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={handleArchiveAllRead}>
+                <BookCheck className="h-4 w-4" />
+                {t(($) => $.menu.archive_all_read)}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={handleArchiveCompleted}>
+                <ListChecks className="h-4 w-4" />
+                {t(($) => $.menu.archive_completed)}
+              </DropdownMenuItem>
+            </>
+          )}
         </DropdownMenuContent>
       </DropdownMenu>
-      )}
     </PageHeader>
   );
 
@@ -633,6 +669,7 @@ export function InboxPage() {
             </Button>
           ) : undefined
         }
+        groups={projectGroups}
       />
     </InboxContextMenuProvider>
   );

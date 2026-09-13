@@ -4,6 +4,7 @@
     "back": "Inbox"
   },
   "menu": {
+    "group_by_project": "Group by project",
     "mark_all_read": "Mark all as read",
     "archive_all": "Archive all",
     "archive_all_read": "Archive all read",
@@ -30,6 +31,8 @@
     "open_in_new_tab": "Open in new tab"
   },
   "list": {
+    "without_project": "Without project",
+    "unknown_project": "Unknown project",
     "empty": "No notifications",
     "mark_done_tooltip": "Mark as done",
     "archive_tooltip": "Archive",

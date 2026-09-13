@@ -30,6 +30,23 @@ export function issueTasksOptions(issueId: string) {
   });
 }
 
+/** Fetch a bounded set of issues in one request per API page for inbox projections. */
+export function issueListByIdsOptions(wsId: string, ids: readonly string[]) {
+  const normalizedIds = [...new Set(ids)].sort();
+  return queryOptions({
+    queryKey: [...issueKeys.all(wsId), "by-ids", normalizedIds] as const,
+    queryFn: async () => {
+      const pages = await Promise.all(
+        Array.from({ length: Math.ceil(normalizedIds.length / 100) }, (_, index) =>
+          api.listIssues({ ids: normalizedIds.slice(index * 100, index * 100 + 100), limit: 100 }),
+        ),
+      );
+      return pages.flatMap((page) => page.issues);
+    },
+    enabled: normalizedIds.length > 0,
+  });
+}
+
 export interface IssueSortParam {
   sort_by?: ListIssuesParams["sort_by"];
   sort_direction?: ListIssuesParams["sort_direction"];

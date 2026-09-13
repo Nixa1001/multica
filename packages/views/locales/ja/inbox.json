@@ -4,6 +4,7 @@
     "back": "インボックス"
   },
   "menu": {
+    "group_by_project": "プロジェクトでグループ化",
     "mark_all_read": "すべて既読にする",
     "archive_all": "すべてアーカイブ",
     "archive_all_read": "既読の項目をすべてアーカイブ",
@@ -28,6 +29,8 @@
     "open_in_new_tab": "新しいタブで開く"
   },
   "list": {
+    "without_project": "プロジェクトなし",
+    "unknown_project": "不明なプロジェクト",
     "empty": "通知はありません",
     "mark_done_tooltip": "完了にする",
     "archive_tooltip": "アーカイブ",

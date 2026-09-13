@@ -4,6 +4,7 @@
     "back": "收件箱"
   },
   "menu": {
+    "group_by_project": "按项目分组",
     "mark_all_read": "全部标为已读",
     "archive_all": "归档全部",
     "archive_all_read": "归档全部已读",
@@ -28,6 +29,8 @@
     "open_in_new_tab": "在新标签页打开"
   },
   "list": {
+    "without_project": "无项目",
+    "unknown_project": "未知项目",
     "empty": "暂无通知",
     "mark_done_tooltip": "标为已完成",
     "archive_tooltip": "归档",
