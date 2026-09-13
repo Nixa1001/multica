@@ -53,3 +53,10 @@ export function parseWithFallback<T>(
   );
   return fallback;
 }
+
+export function parseWithSafeFallback<T>(data: unknown, schema: ZodType, fallback: T, opts: ParseOptions): T {
+  const result = schema.safeParse(data);
+  if (result.success) return result.data as T;
+  schemaLogger.warn(`API response failed schema validation: ${opts.endpoint}`, { endpoint: opts.endpoint, issues: result.error.issues.map(({ code, path, message }) => ({ code, path, message })) });
+  return fallback;
+}
