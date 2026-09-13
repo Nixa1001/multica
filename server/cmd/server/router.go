@@ -1859,6 +1859,13 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		// --- Workspace-scoped routes (all require workspace membership) ---
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.RequireWorkspaceMember(queries))
+			r.Route("/api/youtube-studio", func(r chi.Router) {
+				r.Get("/videos", h.YouTubeStudioVideos)
+				r.Get("/videos/{video_id}", h.YouTubeStudioVideo)
+				r.Put("/videos/{video_id}/markdown-bindings/{issue_id}", h.YouTubeStudioBind)
+				r.Get("/videos/{video_id}/artifacts/{artifact_id}/versions", h.YouTubeStudioVersions)
+				r.Get("/videos/{video_id}/artifacts/{artifact_id}/versions/{version_id}", h.YouTubeStudioVersion)
+			})
 
 			// Assignee frequency
 			r.Get("/api/assignee-frequency", h.GetAssigneeFrequency)

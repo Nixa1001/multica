@@ -186,3 +186,64 @@ WHERE i.id = $4 AND i.workspace_id = $1 AND i.project_id = $2
 ON CONFLICT (workspace_id, issue_id) WHERE active DO NOTHING;
 -- name: GetYouTubeStudioBackendPID :one
 SELECT pg_backend_pid();
+
+-- name: LockProjectForYouTubeStudioBinding :one
+SELECT id FROM project WHERE id = sqlc.arg(project_id) AND workspace_id = sqlc.arg(workspace_id) FOR KEY SHARE;
+
+-- name: GetYouTubeStudioBinding :one
+SELECT b.id, b.workspace_id, b.project_id, b.issue_id, b.artifact_key, b.kind, b.active, b.created_at,
+       a.id AS artifact_id
+FROM youtube_issue_binding b
+JOIN youtube_artifact a ON a.workspace_id = b.workspace_id AND a.project_id = b.project_id AND a.artifact_key = b.artifact_key
+WHERE b.workspace_id = sqlc.arg(workspace_id) AND b.project_id = sqlc.arg(project_id) AND b.issue_id = sqlc.arg(issue_id) AND b.active;
+
+-- name: ListYouTubeStudioVideos :many
+SELECT v.project_id AS video_id, p.title AS name, p.icon, v.lifecycle_state,
+       count(b.id)::bigint AS material_count, 0::bigint AS attention_count, v.updated_at
+FROM youtube_video_project v
+JOIN project p ON p.id = v.project_id AND p.workspace_id = v.workspace_id
+LEFT JOIN youtube_issue_binding b ON b.workspace_id = v.workspace_id AND b.project_id = v.project_id AND b.active
+WHERE v.workspace_id = sqlc.arg(workspace_id)
+  AND (sqlc.narg('before_updated_at')::timestamptz IS NULL OR (v.updated_at, v.project_id) < (sqlc.narg('before_updated_at')::timestamptz, sqlc.narg('before_video_id')::uuid))
+GROUP BY v.project_id, p.title, p.icon, v.lifecycle_state, v.updated_at
+ORDER BY v.updated_at DESC, v.project_id DESC
+LIMIT sqlc.arg(row_limit);
+
+-- name: GetYouTubeStudioVideo :one
+SELECT v.project_id AS video_id, p.title AS name, v.lifecycle_state
+FROM youtube_video_project v JOIN project p ON p.id = v.project_id AND p.workspace_id = v.workspace_id
+WHERE v.workspace_id = sqlc.arg(workspace_id) AND v.project_id = sqlc.arg(project_id);
+
+-- name: ListYouTubeStudioMaterials :many
+SELECT b.id AS binding_id, a.id AS artifact_id, b.kind, b.issue_id, i.number AS issue_number,
+       i.title AS issue_title, i.status AS issue_status, i.workspace_id AS issue_workspace_id,
+       (SELECT issue_prefix FROM workspace WHERE id=b.workspace_id) AS issue_prefix,
+       r.id AS latest_result_id, r.recorded_at AS latest_result_at,
+       v.id AS current_version_id, v.version_number AS current_version_number, v.sha256 AS current_sha256, v.recorded_at AS current_recorded_at,
+       CASE WHEN v.id IS NOT NULL THEN 'available' ELSE 'unavailable' END AS source_state,
+       CASE WHEN v.id IS NOT NULL THEN 'ready' WHEN r.id IS NOT NULL THEN 'processing' ELSE 'awaiting_result' END AS ingestion_state,
+       1::int AS attempt_count, NULL::timestamptz AS next_attempt_at, NULL::text AS failure_code
+FROM youtube_issue_binding b
+JOIN youtube_artifact a ON a.workspace_id=b.workspace_id AND a.project_id=b.project_id AND a.artifact_key=b.artifact_key
+LEFT JOIN issue i ON i.id=b.issue_id AND i.workspace_id=b.workspace_id AND i.project_id=b.project_id
+LEFT JOIN LATERAL (SELECT r.* FROM youtube_issue_result r WHERE r.workspace_id=b.workspace_id AND r.binding_id=b.id ORDER BY r.recorded_at DESC LIMIT 1) r ON true
+LEFT JOIN youtube_artifact_version v ON v.artifact_id=a.id AND v.version_number=a.current_version_number
+WHERE b.workspace_id=sqlc.arg(workspace_id) AND b.project_id=sqlc.arg(project_id) AND b.active
+ORDER BY b.created_at ASC, b.id ASC;
+
+-- name: ListYouTubeStudioVersions :many
+SELECT v.id, v.artifact_id, v.version_number, v.sha256, v.recorded_at, v.source_result_id, v.source_issue_id, v.source_task_id
+FROM youtube_artifact_version v JOIN youtube_artifact a ON a.id=v.artifact_id AND a.workspace_id=v.workspace_id
+WHERE v.workspace_id=sqlc.arg(workspace_id) AND v.artifact_id=sqlc.arg(artifact_id)
+  AND (sqlc.narg('before_version')::int IS NULL OR v.version_number < sqlc.narg('before_version')::int)
+ORDER BY v.version_number DESC LIMIT sqlc.arg(row_limit);
+
+-- name: GetYouTubeStudioVersion :one
+SELECT v.id, v.artifact_id, v.version_number, v.markdown, v.sha256, v.recorded_at,
+       v.source_result_id, v.source_issue_id, v.source_task_id, a.project_id
+FROM youtube_artifact_version v JOIN youtube_artifact a ON a.id=v.artifact_id AND a.workspace_id=v.workspace_id
+WHERE v.workspace_id=sqlc.arg(workspace_id) AND a.project_id=sqlc.arg(project_id) AND v.artifact_id=sqlc.arg(artifact_id) AND v.id=sqlc.arg(version_id);
+
+-- name: GetYouTubeStudioProducer :one
+SELECT a.id, a.name FROM agent_task_queue t JOIN agent a ON a.id=t.agent_id AND a.workspace_id=sqlc.arg(workspace_id)
+WHERE t.id=sqlc.arg(task_id) AND t.workspace_id=sqlc.arg(workspace_id);
