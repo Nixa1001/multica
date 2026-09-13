@@ -190,20 +190,23 @@ type RuntimeRecoveryNotifier interface {
 }
 
 type Handler struct {
-	Queries                *db.Queries
-	ReadSelector           *dbreader.Selector
-	DB                     dbExecutor
-	TxStarter              txStarter
-	Hub                    *realtime.Hub
-	DaemonHub              *daemonws.Hub
-	DaemonProfileRefresh   RuntimeProfileRefreshNotifier
-	DaemonWorkspaceRefresh WorkspaceSetRefreshNotifier
-	DaemonRuntimeGone      RuntimeGoneNotifier
-	Bus                    *events.Bus
-	TaskService            *service.TaskService
-	PluginService          *service.PluginService
-	IssueService           *service.IssueService
-	AutopilotService       *service.AutopilotService
+	Queries      *db.Queries
+	ReadSelector *dbreader.Selector
+	DB           dbExecutor
+	TxStarter    txStarter
+	// YouTubeStudioBindAfterProjectLock is test-only instrumentation for
+	// deterministic transaction race coverage; nil in production.
+	YouTubeStudioBindAfterProjectLock func()
+	Hub                               *realtime.Hub
+	DaemonHub                         *daemonws.Hub
+	DaemonProfileRefresh              RuntimeProfileRefreshNotifier
+	DaemonWorkspaceRefresh            WorkspaceSetRefreshNotifier
+	DaemonRuntimeGone                 RuntimeGoneNotifier
+	Bus                               *events.Bus
+	TaskService                       *service.TaskService
+	PluginService                     *service.PluginService
+	IssueService                      *service.IssueService
+	AutopilotService                  *service.AutopilotService
 	// Entitlements supplies workspace-scoped commercial gates. A nil provider
 	// preserves self-hosted behavior without extra reads.
 	Entitlements entitlement.Provider

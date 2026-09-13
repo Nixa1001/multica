@@ -87,6 +87,9 @@ func (h *Handler) YouTubeStudioBind(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	if h.YouTubeStudioBindAfterProjectLock != nil {
+		h.YouTubeStudioBindAfterProjectLock()
+	}
 	var issueProject pgtype.UUID
 	var issueWorkspace pgtype.UUID
 	var parent pgtype.UUID
