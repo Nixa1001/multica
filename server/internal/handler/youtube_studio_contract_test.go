@@ -333,7 +333,7 @@ func TestYouTubeStudioVersionsHTTPImmutableProvenanceAndPagination(t *testing.T)
 	if len(third["versions"].([]any)) != 0 || third["next_before_version"] != nil {
 		t.Fatalf("empty versions page=%v", third)
 	}
-	checkDetail := func(version, markdown, hash, task, producer string) {
+	checkDetail := func(version, markdown, hash, result, task, producerID, producer string) {
 		path := "/api/youtube-studio/videos/" + project + "/artifacts/" + artifact + "/versions/" + version + "?workspace_id=" + testWorkspaceID
 		w := httptest.NewRecorder()
 		testHandler.YouTubeStudioVersion(w, youtubeVersionDetailURL(httptest.NewRequest(http.MethodGet, path, nil), project, artifact, version))
@@ -344,8 +344,12 @@ func TestYouTubeStudioVersionsHTTPImmutableProvenanceAndPagination(t *testing.T)
 			Markdown   string `json:"markdown"`
 			Hash       string `json:"sha256"`
 			Provenance struct {
+				Result   string `json:"source_result_id"`
+				Issue    string `json:"source_issue_id"`
 				Task     string `json:"source_task_id"`
 				Producer *struct {
+					Type string `json:"type"`
+					ID   string `json:"id"`
 					Name string `json:"name"`
 				} `json:"producer"`
 			} `json:"provenance"`
@@ -353,16 +357,61 @@ func TestYouTubeStudioVersionsHTTPImmutableProvenanceAndPagination(t *testing.T)
 		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 			t.Fatal(err)
 		}
-		if body.Markdown != markdown || body.Hash != hash || body.Provenance.Task != task || (producer == "" && body.Provenance.Producer != nil) || (producer != "" && (body.Provenance.Producer == nil || body.Provenance.Producer.Name != producer)) {
+		producerOK := producer == "" && body.Provenance.Producer == nil
+		if producer != "" {
+			producerOK = body.Provenance.Producer != nil && body.Provenance.Producer.Type == "agent" && body.Provenance.Producer.ID == producerID && body.Provenance.Producer.Name == producer
+		}
+		if body.Markdown != markdown || body.Hash != hash || body.Provenance.Result != result || body.Provenance.Issue != issue || body.Provenance.Task != task || !producerOK {
 			t.Fatalf("version %s body=%s", version, w.Body.String())
 		}
 	}
-	checkDetail(versionN, "immutable N markdown", string(repeatByte('1', 64)), taskN, "HTTP Producer N")
-	checkDetail(versionN1, "immutable N+1 markdown", string(repeatByte('2', 64)), taskN1, "HTTP Producer N+1")
+	checkDetail(versionN, "immutable N markdown", string(repeatByte('1', 64)), "00000000-0000-0000-0000-000000000011", taskN, producerN, "HTTP Producer N")
+	checkDetail(versionN1, "immutable N+1 markdown", string(repeatByte('2', 64)), "00000000-0000-0000-0000-000000000012", taskN1, producerN1, "HTTP Producer N+1")
 	if _, err := testPool.Exec(ctx, `DELETE FROM agent WHERE id=$1`, producerN1); err != nil {
 		t.Fatal(err)
 	}
-	checkDetail(versionN1, "immutable N+1 markdown", string(repeatByte('2', 64)), taskN1, "")
+	checkDetail(versionN1, "immutable N+1 markdown", string(repeatByte('2', 64)), "00000000-0000-0000-0000-000000000012", taskN1, "", "")
+}
+
+func TestYouTubeStudioBindWrongExistingArtifactKeyRollsBack(t *testing.T) {
+	ctx := context.Background()
+	var project, issue, artifact string
+	if err := testPool.QueryRow(ctx, `INSERT INTO project(workspace_id,title) VALUES($1,'HTTP binding conflict') RETURNING id`, testWorkspaceID).Scan(&project); err != nil {
+		t.Fatal(err)
+	}
+	if err := testPool.QueryRow(ctx, `INSERT INTO issue(workspace_id,project_id,title,status,creator_type,creator_id,number) VALUES($1,$2,'conflict source','in_progress','member',$3,930000001) RETURNING id`, testWorkspaceID, project, testUserID).Scan(&issue); err != nil {
+		t.Fatal(err)
+	}
+	if err := testPool.QueryRow(ctx, `INSERT INTO youtube_artifact(workspace_id,project_id,artifact_key) VALUES($1,$2,'wrong-key') RETURNING id`, testWorkspaceID, project).Scan(&artifact); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testPool.Exec(ctx, `INSERT INTO youtube_issue_binding(workspace_id,project_id,issue_id,artifact_key,kind) VALUES($1,$2,$3,'wrong-key','markdown')`, testWorkspaceID, project, issue); err != nil {
+		t.Fatal(err)
+	}
+	var beforeProfiles, beforeArtifacts, beforeBindings int
+	if err := testPool.QueryRow(ctx, `SELECT (SELECT count(*) FROM youtube_video_project WHERE project_id=$1),(SELECT count(*) FROM youtube_artifact WHERE project_id=$1),(SELECT count(*) FROM youtube_issue_binding WHERE project_id=$1)`, project).Scan(&beforeProfiles, &beforeArtifacts, &beforeBindings); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(ctx, `DELETE FROM youtube_issue_binding WHERE project_id=$1`, project)
+		_, _ = testPool.Exec(ctx, `DELETE FROM youtube_artifact WHERE project_id=$1`, project)
+		_, _ = testPool.Exec(ctx, `DELETE FROM youtube_video_project WHERE project_id=$1`, project)
+		_, _ = testPool.Exec(ctx, `DELETE FROM issue WHERE id=$1`, issue)
+		_, _ = testPool.Exec(ctx, `DELETE FROM project WHERE id=$1`, project)
+	})
+	req := youtubeHandlerURL(httptest.NewRequest(http.MethodPut, "/api/youtube-studio/videos/"+project+"/markdown-bindings/"+issue+"?workspace_id="+testWorkspaceID, nil), project, issue)
+	w := httptest.NewRecorder()
+	testHandler.YouTubeStudioBind(w, req)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status=%d want 409: %s", w.Code, w.Body.String())
+	}
+	var profiles, artifacts, bindings int
+	if err := testPool.QueryRow(ctx, `SELECT (SELECT count(*) FROM youtube_video_project WHERE project_id=$1),(SELECT count(*) FROM youtube_artifact WHERE project_id=$1),(SELECT count(*) FROM youtube_issue_binding WHERE project_id=$1)`, project).Scan(&profiles, &artifacts, &bindings); err != nil {
+		t.Fatal(err)
+	}
+	if profiles != beforeProfiles || artifacts != beforeArtifacts || bindings != beforeBindings {
+		t.Fatalf("conflict changed rows from %d/%d/%d to %d/%d/%d", beforeProfiles, beforeArtifacts, beforeBindings, profiles, artifacts, bindings)
+	}
 }
 
 func repeatByte(b byte, n int) []byte {
