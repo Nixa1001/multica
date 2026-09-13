@@ -145,3 +145,57 @@ func TestYouTubeStudioVersionsRejectsMismatchedArtifact(t *testing.T) {
 		t.Fatalf("status=%d want 404: %s", w.Code, w.Body.String())
 	}
 }
+
+func TestYouTubeStudioBindRejectsForeignIssueWithoutWrites(t *testing.T) {
+	ctx := context.Background()
+	var project, foreignProject, issue string
+	if err := testPool.QueryRow(ctx, `INSERT INTO project(workspace_id,title) VALUES($1,'HTTP target'),($1,'HTTP foreign') RETURNING id`, testWorkspaceID).Scan(&project); err != nil {
+		t.Fatal(err)
+	}
+	if err := testPool.QueryRow(ctx, `SELECT id FROM project WHERE workspace_id=$1 AND title='HTTP foreign' ORDER BY created_at DESC LIMIT 1`, testWorkspaceID).Scan(&foreignProject); err != nil {
+		t.Fatal(err)
+	}
+	if err := testPool.QueryRow(ctx, `INSERT INTO issue(workspace_id,project_id,title,status,creator_type,creator_id,number) VALUES($1,$2,'foreign source','in_progress','member',$3,900000002) RETURNING id`, testWorkspaceID, foreignProject, testUserID).Scan(&issue); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(ctx, `DELETE FROM issue WHERE id=$1`, issue)
+		_, _ = testPool.Exec(ctx, `DELETE FROM project WHERE id IN ($1,$2)`, project, foreignProject)
+	})
+	req := youtubeHandlerURL(httptest.NewRequest(http.MethodPut, "/api/youtube-studio/videos/"+project+"/markdown-bindings/"+issue+"?workspace_id="+testWorkspaceID, nil), project, issue)
+	w := httptest.NewRecorder()
+	testHandler.YouTubeStudioBind(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status=%d want 404: %s", w.Code, w.Body.String())
+	}
+	var profiles, artifacts, bindings int
+	if err := testPool.QueryRow(ctx, `SELECT (SELECT count(*) FROM youtube_video_project WHERE project_id=$1),(SELECT count(*) FROM youtube_artifact WHERE project_id=$1),(SELECT count(*) FROM youtube_issue_binding WHERE project_id=$1)`, project).Scan(&profiles, &artifacts, &bindings); err != nil {
+		t.Fatal(err)
+	}
+	if profiles != 0 || artifacts != 0 || bindings != 0 {
+		t.Fatalf("scope rejection wrote rows=%d/%d/%d", profiles, artifacts, bindings)
+	}
+}
+
+func TestYouTubeStudioPaginationRejectsInvalidArguments(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		path string
+		h    func(http.ResponseWriter, *http.Request)
+	}{
+		{name: "video limit", path: "/api/youtube-studio/videos?workspace_id=" + testWorkspaceID + "&limit=0", h: testHandler.YouTubeStudioVideos},
+		{name: "version cursor", path: "/api/youtube-studio/videos/00000000-0000-0000-0000-000000000001/artifacts/00000000-0000-0000-0000-000000000002/versions?workspace_id=" + testWorkspaceID + "&before_version=0", h: testHandler.YouTubeStudioVersions},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, tc.path, nil)
+			if tc.name == "version cursor" {
+				req = youtubeVersionURL(req, "00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000002")
+			}
+			w := httptest.NewRecorder()
+			tc.h(w, req)
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d want 400: %s", w.Code, w.Body.String())
+			}
+		})
+	}
+}
