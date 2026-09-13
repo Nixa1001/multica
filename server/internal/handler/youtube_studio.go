@@ -190,14 +190,15 @@ func (h *Handler) YouTubeStudioVideos(w http.ResponseWriter, r *http.Request) {
 	var last youtubeCursor
 	for rows.Next() {
 		var id pgtype.UUID
-		var name, icon, state string
+		var name, state string
+		var icon pgtype.Text
 		var mc, ac int64
 		var at time.Time
 		if e = rows.Scan(&id, &name, &icon, &state, &mc, &ac, &at); e != nil {
 			writeErrorCode(w, 500, "studio_read_failed", "Studio read failed")
 			return
 		}
-		videos = append(videos, map[string]any{"video_id": uuidToString(id), "name": name, "icon": nilIfEmpty(icon), "lifecycle_state": state, "material_count": mc, "attention_count": ac, "updated_at": at.UTC().Format(time.RFC3339Nano)})
+		videos = append(videos, map[string]any{"video_id": uuidToString(id), "name": name, "icon": nilIfEmpty(icon.String), "lifecycle_state": state, "material_count": mc, "attention_count": ac, "updated_at": at.UTC().Format(time.RFC3339Nano)})
 		last = youtubeCursor{At: at, ID: uuidToString(id)}
 	}
 	if e = rows.Err(); e != nil {

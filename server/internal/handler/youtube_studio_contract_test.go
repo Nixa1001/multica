@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -174,6 +175,95 @@ func TestYouTubeStudioBindRejectsForeignIssueWithoutWrites(t *testing.T) {
 	}
 	if profiles != 0 || artifacts != 0 || bindings != 0 {
 		t.Fatalf("scope rejection wrote rows=%d/%d/%d", profiles, artifacts, bindings)
+	}
+}
+
+func TestYouTubeStudioBindRejectsCrossWorkspaceIssueWithoutWrites(t *testing.T) {
+	ctx := context.Background()
+	var foreignWorkspace, project, issue string
+	slug := "studio-cross-" + time.Now().Format("150405.000000")
+	if err := testPool.QueryRow(ctx, `INSERT INTO workspace(name,slug,description,issue_prefix) VALUES('HTTP cross workspace',$1,'','CRS') RETURNING id`, slug).Scan(&foreignWorkspace); err != nil {
+		t.Fatal(err)
+	}
+	if err := testPool.QueryRow(ctx, `INSERT INTO project(workspace_id,title) VALUES($1,'HTTP cross project') RETURNING id`, foreignWorkspace).Scan(&project); err != nil {
+		t.Fatal(err)
+	}
+	if err := testPool.QueryRow(ctx, `INSERT INTO issue(workspace_id,project_id,title,status,creator_type,creator_id,number) VALUES($1,$2,'cross source','in_progress','member',$3,900000003) RETURNING id`, foreignWorkspace, project, testUserID).Scan(&issue); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(ctx, `DELETE FROM issue WHERE id=$1`, issue)
+		_, _ = testPool.Exec(ctx, `DELETE FROM project WHERE id=$1`, project)
+		_, _ = testPool.Exec(ctx, `DELETE FROM workspace WHERE id=$1`, foreignWorkspace)
+	})
+	req := youtubeHandlerURL(httptest.NewRequest(http.MethodPut, "/api/youtube-studio/videos/"+project+"/markdown-bindings/"+issue+"?workspace_id="+testWorkspaceID, nil), project, issue)
+	w := httptest.NewRecorder()
+	testHandler.YouTubeStudioBind(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status=%d want 404: %s", w.Code, w.Body.String())
+	}
+	var count int
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM youtube_video_project WHERE project_id=$1`, project).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("cross-workspace rejection wrote %d profile rows", count)
+	}
+}
+
+func TestYouTubeStudioVideosPaginationHasStablePages(t *testing.T) {
+	ctx := context.Background()
+	var projects [4]string
+	for i := range projects {
+		if err := testPool.QueryRow(ctx, `INSERT INTO project(workspace_id,title) VALUES($1,$2) RETURNING id`, testWorkspaceID, "HTTP page "+string(rune('A'+i))).Scan(&projects[i]); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := testPool.Exec(ctx, `INSERT INTO youtube_video_project(workspace_id,project_id,updated_at) VALUES($1,$2,now()+($3 * interval '1 second'))`, testWorkspaceID, projects[i], 3-i); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		for _, project := range projects {
+			_, _ = testPool.Exec(ctx, `DELETE FROM youtube_video_project WHERE project_id=$1`, project)
+			_, _ = testPool.Exec(ctx, `DELETE FROM project WHERE id=$1`, project)
+		}
+	})
+	call := func(cursor string) (int, map[string]any) {
+		path := "/api/youtube-studio/videos?workspace_id=" + testWorkspaceID + "&limit=1"
+		if cursor != "" {
+			path += "&cursor=" + cursor
+		}
+		w := httptest.NewRecorder()
+		testHandler.YouTubeStudioVideos(w, httptest.NewRequest(http.MethodGet, path, nil))
+		if w.Code != http.StatusOK {
+			t.Fatalf("status=%d want 200: %s", w.Code, w.Body.String())
+		}
+		var body map[string]any
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		return w.Code, body
+	}
+	_, first := call("")
+	firstVideos := first["videos"].([]any)
+	if len(firstVideos) != 1 || first["next_cursor"] == nil {
+		t.Fatalf("first page=%v", first)
+	}
+	_, second := call(first["next_cursor"].(string))
+	if len(second["videos"].([]any)) != 1 || second["next_cursor"] == nil {
+		t.Fatalf("second page=%v", second)
+	}
+	_, third := call(second["next_cursor"].(string))
+	if len(third["videos"].([]any)) != 1 || third["next_cursor"] == nil {
+		t.Fatalf("third page=%v", third)
+	}
+	_, fourth := call(third["next_cursor"].(string))
+	if len(fourth["videos"].([]any)) != 1 || fourth["next_cursor"] == nil {
+		t.Fatalf("fourth page=%v", fourth)
+	}
+	_, end := call(fourth["next_cursor"].(string))
+	if len(end["videos"].([]any)) != 0 || end["next_cursor"] != nil {
+		t.Fatalf("empty end page=%v", end)
 	}
 }
 
