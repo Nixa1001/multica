@@ -102,6 +102,7 @@ function PropRow({
 
 export function ProjectDetail({ projectId }: { projectId: string }) {
   const { t } = useT("projects");
+  const { t: layoutT } = useT("layout");
   const statusLabels = useProjectStatusLabels();
   const priorityLabels = useProjectPriorityLabels();
   const wsId = useWorkspaceId();
@@ -487,7 +488,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
               <>
               {studioVideos?.videos.some((video) => video.video_id === projectId) && (
                 <Button variant="outline" size="sm" onClick={() => router.push(wsPaths.youtubeStudioVideo(projectId))}>
-                  YouTube Studio
+                  {layoutT(($) => $.nav.youtube_studio)}
                 </Button>
               )}
               <Button
