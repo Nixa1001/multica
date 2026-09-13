@@ -4,14 +4,61 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+type youtubeFaultRow struct{ err error }
+
+func (r youtubeFaultRow) Scan(...any) error { return r.err }
+
+type youtubeFaultTx struct {
+	pgx.Tx
+	fault string
+}
+
+func (tx youtubeFaultTx) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	if strings.Contains(sql, tx.fault) {
+		return youtubeFaultRow{err: errors.New("injected database failure")}
+	}
+	return tx.Tx.QueryRow(ctx, sql, args...)
+}
+
+type youtubeFaultStarter struct {
+	pool  *pgxpool.Pool
+	fault string
+}
+
+func (s youtubeFaultStarter) Begin(ctx context.Context) (pgx.Tx, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return youtubeFaultTx{Tx: tx, fault: s.fault}, nil
+}
+
+type youtubeRowsError struct{ pgx.Rows }
+
+func (youtubeRowsError) Err() error { return errors.New("injected rows failure") }
+
+type youtubeRowsFaultDB struct{ dbExecutor }
+
+func (db youtubeRowsFaultDB) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+	rows, err := db.dbExecutor.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, err
+	}
+	return youtubeRowsError{Rows: rows}, nil
+}
 
 func youtubeHandlerURL(r *http.Request, video, issue string) *http.Request {
 	ctx := chi.NewRouteContext()
@@ -411,6 +458,57 @@ func TestYouTubeStudioBindWrongExistingArtifactKeyRollsBack(t *testing.T) {
 	}
 	if profiles != beforeProfiles || artifacts != beforeArtifacts || bindings != beforeBindings {
 		t.Fatalf("conflict changed rows from %d/%d/%d to %d/%d/%d", beforeProfiles, beforeArtifacts, beforeBindings, profiles, artifacts, bindings)
+	}
+}
+
+func TestYouTubeStudioBindDatabaseFaultsReturn500AndRollback(t *testing.T) {
+	ctx := context.Background()
+	var project, parent, child string
+	if err := testPool.QueryRow(ctx, `INSERT INTO project(workspace_id,title) VALUES($1,'HTTP injected faults') RETURNING id`, testWorkspaceID).Scan(&project); err != nil {
+		t.Fatal(err)
+	}
+	if err := testPool.QueryRow(ctx, `INSERT INTO issue(workspace_id,project_id,title,status,creator_type,creator_id,number) VALUES($1,$2,'parent','in_progress','member',$3,940000001) RETURNING id`, testWorkspaceID, project, testUserID).Scan(&parent); err != nil {
+		t.Fatal(err)
+	}
+	if err := testPool.QueryRow(ctx, `INSERT INTO issue(workspace_id,project_id,parent_issue_id,title,status,creator_type,creator_id,number) VALUES($1,$2,$3,'child','in_progress','member',$4,940000002) RETURNING id`, testWorkspaceID, project, parent, testUserID).Scan(&child); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(ctx, `DELETE FROM youtube_issue_binding WHERE project_id=$1`, project)
+		_, _ = testPool.Exec(ctx, `DELETE FROM youtube_artifact WHERE project_id=$1`, project)
+		_, _ = testPool.Exec(ctx, `DELETE FROM youtube_video_project WHERE project_id=$1`, project)
+		_, _ = testPool.Exec(ctx, `DELETE FROM issue WHERE project_id=$1`, project)
+		_, _ = testPool.Exec(ctx, `DELETE FROM project WHERE id=$1`, project)
+	})
+	call := func(issueID, fault string) {
+		clone := *testHandler
+		clone.TxStarter = youtubeFaultStarter{pool: testPool, fault: fault}
+		req := youtubeHandlerURL(httptest.NewRequest(http.MethodPut, "/api/youtube-studio/videos/"+project+"/markdown-bindings/"+issueID+"?workspace_id="+testWorkspaceID, nil), project, issueID)
+		w := httptest.NewRecorder()
+		clone.YouTubeStudioBind(w, req)
+		if w.Code != http.StatusInternalServerError {
+			t.Fatalf("fault %q status=%d want 500: %s", fault, w.Code, w.Body.String())
+		}
+	}
+	call(child, "SELECT project_id,workspace_id,parent_issue_id")
+	call(child, "SELECT project_id,workspace_id FROM issue")
+	var profiles, artifacts, bindings int
+	if err := testPool.QueryRow(ctx, `SELECT (SELECT count(*) FROM youtube_video_project WHERE project_id=$1),(SELECT count(*) FROM youtube_artifact WHERE project_id=$1),(SELECT count(*) FROM youtube_issue_binding WHERE project_id=$1)`, project).Scan(&profiles, &artifacts, &bindings); err != nil {
+		t.Fatal(err)
+	}
+	if profiles != 0 || artifacts != 0 || bindings != 0 {
+		t.Fatalf("fault rollback rows=%d/%d/%d", profiles, artifacts, bindings)
+	}
+}
+
+func TestYouTubeStudioVideoRowsErrorReturns500WithoutPartialSuccess(t *testing.T) {
+	clone := *testHandler
+	clone.DB = youtubeRowsFaultDB{dbExecutor: testPool}
+	req := httptest.NewRequest(http.MethodGet, "/api/youtube-studio/videos?workspace_id="+testWorkspaceID, nil)
+	w := httptest.NewRecorder()
+	clone.YouTubeStudioVideos(w, req)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d want 500: %s", w.Code, w.Body.String())
 	}
 }
 
