@@ -185,7 +185,7 @@ func TestYouTubeStudioBindRejectsCrossWorkspaceIssueWithoutWrites(t *testing.T) 
 	if err := testPool.QueryRow(ctx, `INSERT INTO workspace(name,slug,description,issue_prefix) VALUES('HTTP cross workspace',$1,'','CRS') RETURNING id`, slug).Scan(&foreignWorkspace); err != nil {
 		t.Fatal(err)
 	}
-	if err := testPool.QueryRow(ctx, `INSERT INTO project(workspace_id,title) VALUES($1,'HTTP cross project') RETURNING id`, foreignWorkspace).Scan(&project); err != nil {
+	if err := testPool.QueryRow(ctx, `INSERT INTO project(workspace_id,title) VALUES($1,'HTTP cross project') RETURNING id`, testWorkspaceID).Scan(&project); err != nil {
 		t.Fatal(err)
 	}
 	if err := testPool.QueryRow(ctx, `INSERT INTO issue(workspace_id,project_id,title,status,creator_type,creator_id,number) VALUES($1,$2,'cross source','in_progress','member',$3,900000003) RETURNING id`, foreignWorkspace, project, testUserID).Scan(&issue); err != nil {
@@ -202,12 +202,12 @@ func TestYouTubeStudioBindRejectsCrossWorkspaceIssueWithoutWrites(t *testing.T) 
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("status=%d want 404: %s", w.Code, w.Body.String())
 	}
-	var count int
-	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM youtube_video_project WHERE project_id=$1`, project).Scan(&count); err != nil {
+	var profiles, artifacts, bindings int
+	if err := testPool.QueryRow(ctx, `SELECT (SELECT count(*) FROM youtube_video_project WHERE project_id=$1),(SELECT count(*) FROM youtube_artifact WHERE project_id=$1),(SELECT count(*) FROM youtube_issue_binding WHERE project_id=$1)`, project).Scan(&profiles, &artifacts, &bindings); err != nil {
 		t.Fatal(err)
 	}
-	if count != 0 {
-		t.Fatalf("cross-workspace rejection wrote %d profile rows", count)
+	if profiles != 0 || artifacts != 0 || bindings != 0 {
+		t.Fatalf("cross-workspace rejection wrote rows=%d/%d/%d", profiles, artifacts, bindings)
 	}
 }
 
@@ -244,23 +244,21 @@ func TestYouTubeStudioVideosPaginationHasStablePages(t *testing.T) {
 		}
 		return w.Code, body
 	}
+	assertPage := func(body map[string]any, want string, next bool) {
+		t.Helper()
+		videos := body["videos"].([]any)
+		if len(videos) != 1 || videos[0].(map[string]any)["video_id"] != want || (next && body["next_cursor"] == nil) || (!next && body["next_cursor"] != nil) {
+			t.Fatalf("page=%v want id=%s next=%v", body, want, next)
+		}
+	}
 	_, first := call("")
-	firstVideos := first["videos"].([]any)
-	if len(firstVideos) != 1 || first["next_cursor"] == nil {
-		t.Fatalf("first page=%v", first)
-	}
+	assertPage(first, projects[0], true)
 	_, second := call(first["next_cursor"].(string))
-	if len(second["videos"].([]any)) != 1 || second["next_cursor"] == nil {
-		t.Fatalf("second page=%v", second)
-	}
+	assertPage(second, projects[1], true)
 	_, third := call(second["next_cursor"].(string))
-	if len(third["videos"].([]any)) != 1 || third["next_cursor"] == nil {
-		t.Fatalf("third page=%v", third)
-	}
+	assertPage(third, projects[2], true)
 	_, fourth := call(third["next_cursor"].(string))
-	if len(fourth["videos"].([]any)) != 1 || fourth["next_cursor"] == nil {
-		t.Fatalf("fourth page=%v", fourth)
-	}
+	assertPage(fourth, projects[3], true)
 	_, end := call(fourth["next_cursor"].(string))
 	if len(end["videos"].([]any)) != 0 || end["next_cursor"] != nil {
 		t.Fatalf("empty end page=%v", end)
