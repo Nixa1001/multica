@@ -4,10 +4,12 @@ import { configStore } from "../config";
 import type { StorageAdapter, User } from "../types";
 import { ApiClient, ApiError, CHAT_DRAFT_RESTORE_CAPABILITY, clientErrorMessage } from "./client";
 import { EMPTY_PLUGIN_PACKAGE_LIST, EMPTY_PLUGIN_PREVIEW, EMPTY_PLUGIN_SURFACE_LAUNCH } from "./schemas";
-import type { Logger } from "../logger";
+import { noopLogger, type Logger } from "../logger";
+import { setSchemaLogger } from "./schema";
 
 afterEach(() => {
   configStore.getState().setAgentConversationStartersSupported(false);
+  setSchemaLogger(noopLogger);
   vi.unstubAllGlobals();
 });
 
@@ -16,8 +18,10 @@ describe("YouTube Studio API contract boundary", () => {
     const rawMarkdown = "# private draft";
     const warn = vi.fn();
     const logger: Logger = { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() };
+    setSchemaLogger(logger);
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ videos: [{ markdown: rawMarkdown }] }), { status: 200 })));
     await expect(new ApiClient("https://api.example.test", { logger }).listYoutubeStudioVideos()).rejects.toThrow(/invalid response/i);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("Studio API response failed schema validation"), expect.objectContaining({ endpoint: "GET /api/youtube-studio/videos" }));
     expect(JSON.stringify(warn.mock.calls)).not.toContain(rawMarkdown);
   });
 });
