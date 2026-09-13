@@ -27,6 +27,14 @@ func youtubeVersionURL(r *http.Request, video, artifact string) *http.Request {
 	return r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, ctx))
 }
 
+func youtubeVersionDetailURL(r *http.Request, video, artifact, version string) *http.Request {
+	ctx := chi.NewRouteContext()
+	ctx.URLParams.Add("video_id", video)
+	ctx.URLParams.Add("artifact_id", artifact)
+	ctx.URLParams.Add("version_id", version)
+	return r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, ctx))
+}
+
 func TestYouTubeStudioBindRetryAndFirstRead(t *testing.T) {
 	ctx := context.Background()
 	var project, issue string
@@ -244,6 +252,125 @@ func TestYouTubeStudioVideoHTTPIngestionStateMatrix(t *testing.T) {
 	if len(seen) != len(keys) {
 		t.Fatalf("state matrix seen=%v materials=%d", seen, len(body.Materials))
 	}
+}
+
+func TestYouTubeStudioVersionsHTTPImmutableProvenanceAndPagination(t *testing.T) {
+	ctx := context.Background()
+	var project, issue, artifact, taskN, taskN1 string
+	if err := testPool.QueryRow(ctx, `INSERT INTO project(workspace_id,title) VALUES($1,'HTTP immutable provenance') RETURNING id`, testWorkspaceID).Scan(&project); err != nil {
+		t.Fatal(err)
+	}
+	if err := testPool.QueryRow(ctx, `INSERT INTO issue(workspace_id,project_id,title,status,creator_type,creator_id,number) VALUES($1,$2,'immutable source','completed','member',$3,920000001) RETURNING id`, testWorkspaceID, project, testUserID).Scan(&issue); err != nil {
+		t.Fatal(err)
+	}
+	producerN := createHandlerTestAgent(t, "HTTP Producer N", []byte("[]"))
+	producerN1 := createHandlerTestAgent(t, "HTTP Producer N+1", []byte("[]"))
+	if err := testPool.QueryRow(ctx, `INSERT INTO agent_task_queue(agent_id,runtime_id,issue_id,status,completed_at) VALUES($1,$2,$3,'completed',now()) RETURNING id`, producerN, testRuntimeID, issue).Scan(&taskN); err != nil {
+		t.Fatal(err)
+	}
+	if err := testPool.QueryRow(ctx, `INSERT INTO agent_task_queue(agent_id,runtime_id,issue_id,status,completed_at) VALUES($1,$2,$3,'completed',now()) RETURNING id`, producerN1, testRuntimeID, issue).Scan(&taskN1); err != nil {
+		t.Fatal(err)
+	}
+	var binding string
+	if err := testPool.QueryRow(ctx, `INSERT INTO youtube_issue_binding(workspace_id,project_id,issue_id,artifact_key,kind) VALUES($1,$2,$3,'immutable','markdown') RETURNING id`, testWorkspaceID, project, issue).Scan(&binding); err != nil {
+		t.Fatal(err)
+	}
+	if err := testPool.QueryRow(ctx, `INSERT INTO youtube_artifact(workspace_id,project_id,artifact_key,current_version_number) VALUES($1,$2,'immutable',2) RETURNING id`, testWorkspaceID, project).Scan(&artifact); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testPool.Exec(ctx, `INSERT INTO youtube_issue_result(id,event_id,workspace_id,project_id,binding_id,artifact_id,source_issue_id,source_task_id,markdown,sha256,recorded_at) VALUES('00000000-0000-0000-0000-000000000011',gen_random_uuid(),$1,$2,$3,$4,$5,$6,'immutable N markdown',repeat('1',64),'2025-02-01T00:00:00Z'),('00000000-0000-0000-0000-000000000012',gen_random_uuid(),$1,$2,$3,$4,$5,$7,'immutable N+1 markdown',repeat('2',64),'2025-02-01T00:00:00Z')`, testWorkspaceID, project, binding, artifact, issue, taskN, taskN1); err != nil {
+		t.Fatal(err)
+	}
+	var versionN, versionN1 string
+	if err := testPool.QueryRow(ctx, `INSERT INTO youtube_artifact_version(id,workspace_id,artifact_id,version_number,source_result_id,source_issue_id,source_task_id,markdown,sha256,recorded_at) VALUES('00000000-0000-0000-0000-000000000021',$1,$2,1,'00000000-0000-0000-0000-000000000011',$3,$4,'immutable N markdown',repeat('1',64),'2025-02-01T00:00:00Z') RETURNING id`, testWorkspaceID, artifact, issue, taskN).Scan(&versionN); err != nil {
+		t.Fatal(err)
+	}
+	if err := testPool.QueryRow(ctx, `INSERT INTO youtube_artifact_version(id,workspace_id,artifact_id,version_number,source_result_id,source_issue_id,source_task_id,markdown,sha256,recorded_at) VALUES('00000000-0000-0000-0000-000000000022',$1,$2,2,'00000000-0000-0000-0000-000000000012',$3,$4,'immutable N+1 markdown',repeat('2',64),'2025-02-01T00:00:00Z') RETURNING id`, testWorkspaceID, artifact, issue, taskN1).Scan(&versionN1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testPool.Exec(ctx, `INSERT INTO youtube_video_project(workspace_id,project_id) VALUES($1,$2)`, testWorkspaceID, project); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(ctx, `DELETE FROM youtube_studio_outbox WHERE result_id IN (SELECT id FROM youtube_issue_result WHERE project_id=$1)`, project)
+		_, _ = testPool.Exec(ctx, `DELETE FROM youtube_issue_result WHERE project_id=$1`, project)
+		_, _ = testPool.Exec(ctx, `DELETE FROM youtube_artifact_version WHERE artifact_id=$1`, artifact)
+		_, _ = testPool.Exec(ctx, `DELETE FROM youtube_artifact WHERE id=$1`, artifact)
+		_, _ = testPool.Exec(ctx, `DELETE FROM youtube_issue_binding WHERE id=$1`, binding)
+		_, _ = testPool.Exec(ctx, `DELETE FROM youtube_video_project WHERE project_id=$1`, project)
+		_, _ = testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE issue_id=$1`, issue)
+		_, _ = testPool.Exec(ctx, `DELETE FROM issue WHERE id=$1`, issue)
+		_, _ = testPool.Exec(ctx, `DELETE FROM project WHERE id=$1`, project)
+		_, _ = testPool.Exec(ctx, `DELETE FROM agent WHERE id IN ($1,$2)`, producerN, producerN1)
+	})
+	list := func(before string) map[string]any {
+		path := "/api/youtube-studio/videos/" + project + "/artifacts/" + artifact + "/versions?workspace_id=" + testWorkspaceID + "&limit=1"
+		if before != "" {
+			path += "&before_version=" + before
+		}
+		w := httptest.NewRecorder()
+		testHandler.YouTubeStudioVersions(w, youtubeVersionURL(httptest.NewRequest(http.MethodGet, path, nil), project, artifact))
+		if w.Code != http.StatusOK {
+			t.Fatalf("list status=%d: %s", w.Code, w.Body.String())
+		}
+		var body map[string]any
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		return body
+	}
+	first := list("")
+	firstItem := first["versions"].([]any)[0].(map[string]any)
+	if firstItem["id"] != versionN1 || firstItem["version_number"].(float64) != 2 || first["next_before_version"].(float64) != 2 {
+		t.Fatalf("first versions page=%v", first)
+	}
+	second := list("2")
+	secondItem := second["versions"].([]any)[0].(map[string]any)
+	if secondItem["id"] != versionN || secondItem["version_number"].(float64) != 1 || second["next_before_version"].(float64) != 1 {
+		t.Fatalf("second versions page=%v", second)
+	}
+	third := list("1")
+	if len(third["versions"].([]any)) != 0 || third["next_before_version"] != nil {
+		t.Fatalf("empty versions page=%v", third)
+	}
+	checkDetail := func(version, markdown, hash, task, producer string) {
+		path := "/api/youtube-studio/videos/" + project + "/artifacts/" + artifact + "/versions/" + version + "?workspace_id=" + testWorkspaceID
+		w := httptest.NewRecorder()
+		testHandler.YouTubeStudioVersion(w, youtubeVersionDetailURL(httptest.NewRequest(http.MethodGet, path, nil), project, artifact, version))
+		if w.Code != http.StatusOK {
+			t.Fatalf("detail status=%d: %s", w.Code, w.Body.String())
+		}
+		var body struct {
+			Markdown   string `json:"markdown"`
+			Hash       string `json:"sha256"`
+			Provenance struct {
+				Task     string `json:"source_task_id"`
+				Producer *struct {
+					Name string `json:"name"`
+				} `json:"producer"`
+			} `json:"provenance"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		if body.Markdown != markdown || body.Hash != hash || body.Provenance.Task != task || (producer == "" && body.Provenance.Producer != nil) || (producer != "" && (body.Provenance.Producer == nil || body.Provenance.Producer.Name != producer)) {
+			t.Fatalf("version %s body=%s", version, w.Body.String())
+		}
+	}
+	checkDetail(versionN, "immutable N markdown", string(repeatByte('1', 64)), taskN, "HTTP Producer N")
+	checkDetail(versionN1, "immutable N+1 markdown", string(repeatByte('2', 64)), taskN1, "HTTP Producer N+1")
+	if _, err := testPool.Exec(ctx, `DELETE FROM agent WHERE id=$1`, producerN1); err != nil {
+		t.Fatal(err)
+	}
+	checkDetail(versionN1, "immutable N+1 markdown", string(repeatByte('2', 64)), taskN1, "")
+}
+
+func repeatByte(b byte, n int) []byte {
+	out := make([]byte, n)
+	for i := range out {
+		out[i] = b
+	}
+	return out
 }
 
 func TestYouTubeStudioVersionsRejectsMismatchedArtifact(t *testing.T) {
