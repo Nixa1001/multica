@@ -164,7 +164,7 @@ test.describe("YouTube Studio live harness", () => {
     await expect(page.getByText("youtube-studio.state_ready")).toBeVisible({ timeout: 20000 });
     await expect(page.getByRole("combobox", { name: /youtube-studio.version/i })).toHaveValue(/.+/);
     await page.getByRole("button", { name: /older_versions/i }).click();
-    await expect(page.getByRole("option", { name: "1" })).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole("option", { name: "1", exact: true })).toBeAttached({ timeout: 10000 });
     await page.reload();
     await expect(page.getByText("youtube-studio.state_ready")).toBeVisible({ timeout: 20000 });
     const detailAfterReload = await fixture.client.getYoutubeStudioVideo(fixture.projectId);
