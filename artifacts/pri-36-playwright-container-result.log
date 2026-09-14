@@ -1,6 +1,6 @@
 PRI-36 browser harness run (2026-09-14, sanitized)
 
-Harness SHA: 225545a27619948f0f9b186895248cfd8d77eb64
+Harness SHA tested: ea12a91af87ce1028a80fc3c1972ea62851e24d1
 Product fix SHA: 5529c08efb0149c66edd92612585019452df2507
 Harness base SHA: 4f21ef0c5aeb9456cc73da8d98cf7b3d0cbdb997
 Browser image: mcr.microsoft.com/playwright:v1.58.2-noble
@@ -10,11 +10,12 @@ Command:
 PLAYWRIGHT_CONTAINER_IMAGE=mcr.microsoft.com/playwright:v1.58.2-noble node scripts/run-youtube-studio-live.mjs
 
 Result: PASS — 2 tests passed.
+- Cold-start readiness regression is fixed: the runner probes `GET /favicon.ico` (HTTP 308 in 1.2s) instead of blocking on cold `GET /`; Playwright then owns the real route compile (25.8s in this run). The earlier PASS was warm/environment-dependent and did not prove the cold root probe.
 - Authenticated completion used POST /api/daemon/tasks/{taskId}/complete for 21 running tasks.
 - Each completion followed active binding -> TaskService.CompleteTask -> result/outbox transaction; the server worker projected the outbox to immutable versions.
-- API detail reached ready at version 21 without a page reload.
+- The authenticated Studio page was open at `awaiting_result` before completion; the same page visibly updated to ready and version 21 without reload/navigation.
 - Pagination regression passed: versions 21..2 then 1 with no overlap.
 - After browser reload, current N=21, SHA-256, source issue/task/result provenance were asserted.
-- Browser diagnostics had no console errors, page errors, or failed requests.
+- Browser diagnostics had no console errors, page errors, or failed requests; the detail-version schema now matches the nested provenance response.
 
 The runner used disposable PostgreSQL, API, web, and Playwright containers/processes and cleaned them up. No credentials, tokens, cookies, or private fixture values are included.
