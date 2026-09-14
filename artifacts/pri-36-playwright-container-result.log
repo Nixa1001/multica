@@ -1,18 +1,20 @@
-PRI-36 browser harness run (2026-09-13)
+PRI-36 browser harness run (2026-09-14, sanitized)
+
+Harness SHA: 59c29b8a9cbb4afe0750072fa9011982503b89d2
+Product fix SHA: 5529c08efb0149c66edd92612585019452df2507
+Harness base SHA: 4f21ef0c5aeb9456cc73da8d98cf7b3d0cbdb997
+Browser image: mcr.microsoft.com/playwright:v1.58.2-noble
+Image digest: sha256:6446946a1d9fd62d9ae501312a2d76a43ee688542b21622056a372959b65d63d
 
 Command:
 PLAYWRIGHT_CONTAINER_IMAGE=mcr.microsoft.com/playwright:v1.58.2-noble node scripts/run-youtube-studio-live.mjs
 
-Isolated browser image: mcr.microsoft.com/playwright:v1.58.2-noble
-Image digest: sha256:6446946a1d9fd62d9ae501312a2d76a43ee688542b21622056a372959b65d63d
-Container Node: v24.13.0
-Host services: disposable PostgreSQL container, Go API, and Next dev server; readiness passed.
+Result: PASS — 2 tests passed.
+- Authenticated completion used POST /api/daemon/tasks/{taskId}/complete for 21 running tasks.
+- Each completion followed active binding -> TaskService.CompleteTask -> result/outbox transaction; the server worker projected the outbox to immutable versions.
+- API detail reached ready at version 21 without a page reload.
+- Pagination regression passed: versions 21..2 then 1 with no overlap.
+- After browser reload, current N=21, SHA-256, source issue/task/result provenance were asserted.
+- Browser diagnostics had no console errors, page errors, or failed requests.
 
-Result:
-- real ApiClient pagination/hash/provenance regression: PASS
-- authenticated browser route: FAIL
-- Browser starts in the container (no host libnspr4.so dependency).
-- API detail returned HTTP 200, but the UI rendered youtube-studio.load_failed. With the localhost origin on an alternate isolated port, CORS passed; the actual render failure was client schema validation: `current_version` omits `source_result_id`, `source_issue_id`, and `source_task_id`, which the current `StudioVideoDetailSchema` requires. The page therefore never exposed version 21.
-- No genuine completion/worker-to-ready transition was proven; the fixture still inserts completed rows/results directly.
-
-The runner stops its process groups and removes only its named disposable database/browser containers.
+The runner used disposable PostgreSQL, API, web, and Playwright containers/processes and cleaned them up. No credentials, tokens, cookies, or private fixture values are included.
