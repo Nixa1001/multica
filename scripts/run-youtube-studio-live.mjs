@@ -50,6 +50,19 @@ const waitHttp = async (url, timeout = 60000) => {
   }
   throw new Error(`readiness timeout: ${url} (${lastError})`);
 };
+const waitHttpServer = async (url, timeout = 60000) => {
+  const started = Date.now();
+  let lastError = "no response";
+  while (Date.now() - started <= timeout) {
+    try {
+      const response = await fetch(url, { signal: AbortSignal.timeout(2000) });
+      if (response.status < 500) return;
+      lastError = `HTTP ${response.status}`;
+    } catch (error) { lastError = error instanceof Error ? error.message : String(error); }
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 250));
+  }
+  throw new Error(`readiness timeout: ${url} (${lastError})`);
+};
 const stop = () => {
   for (const child of children) {
     if (!child.killed) {
@@ -73,7 +86,12 @@ try {
   const server = run(go, ["run", "./cmd/server"], { name: "server", cwd: resolve(root, "server") });
   await waitHttp(`http://localhost:${port}/healthz`);
   const web = run(existsSync(pnpm) ? pnpm : npm, [...pnpmArgs, "--filter", "@multica/web", "dev"], { name: "web" });
-  await waitHttp(`http://localhost:${webPort}/`);
+  // Do not use GET / as readiness: a cold Next dev server compiles the entire
+  // application route there and can exceed the probe window before Playwright
+  // has a chance to start. Any non-5xx response from a static probe proves the
+  // HTTP server is accepting connections; the real route remains Playwright's
+  // responsibility and is covered by the authenticated browser assertions.
+  await waitHttpServer(`http://localhost:${webPort}/favicon.ico`);
   const testCommand = playwrightImage ? "/usr/bin/docker" : localPlaywright;
   const testArgs = playwrightImage
     ? ["run", "--rm", "--network", "host", "--name", `multica-pri36-playwright-${process.pid}`, "-v", `${root}:/work`, "-w", "/work", ...Object.entries(browserEnv).filter(([key]) => ["DATABASE_URL", "PORT", "FRONTEND_PORT", "NEXT_PUBLIC_API_URL", "PLAYWRIGHT_BASE_URL", "MULTICA_DEV_VERIFICATION_CODE", "APP_ENV"].includes(key)).flatMap(([key, value]) => ["-e", `${key}=${value}`]), playwrightImage, "node_modules/.bin/playwright", "test", "e2e/youtube-studio-live.spec.ts", "--project=chromium"]

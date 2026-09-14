@@ -143,7 +143,6 @@ test.describe("YouTube Studio live harness", () => {
 
   test("authenticated web route renders versions and pagination", async ({ page }) => {
     test.setTimeout(120000);
-    await completeVersions(fixture);
     const browserErrors: string[] = [];
     const apiResponses: string[] = [];
     page.on("console", (message) => { if (message.type() === "error" || message.type() === "warning") browserErrors.push(`console ${message.type()}: ${message.text()}`); });
@@ -159,14 +158,17 @@ test.describe("YouTube Studio live harness", () => {
     });
     await page.addInitScript((token) => localStorage.setItem("multica_token", token), fixture.api.getToken());
     await page.goto(`/${fixture.workspace.slug}/youtube-studio/${fixture.projectId}`);
-    await page.waitForTimeout(1000);
-    if (browserErrors.length > 0) throw new Error(`browser diagnostics: ${browserErrors.join(" | ")}`);
+    await expect(page.getByText("youtube-studio.state_awaiting_result")).toBeVisible({ timeout: 20000 });
+    await completeVersions(fixture);
     await expect(page.getByText("youtube-studio.state_ready")).toBeVisible({ timeout: 20000 });
+    await expect(page.getByText("Studio live version 21")).toBeVisible({ timeout: 20000 });
+    if (browserErrors.length > 0) throw new Error(`browser diagnostics: ${browserErrors.join(" | ")}`);
     await expect(page.getByRole("combobox", { name: /youtube-studio.version/i })).toHaveValue(/.+/);
     await page.getByRole("button", { name: /older_versions/i }).click();
     await expect(page.getByRole("option", { name: "1", exact: true })).toBeAttached({ timeout: 10000 });
     await page.reload();
     await expect(page.getByText("youtube-studio.state_ready")).toBeVisible({ timeout: 20000 });
+    await expect(page.getByText("Studio live version 21")).toBeVisible({ timeout: 20000 });
     const detailAfterReload = await fixture.client.getYoutubeStudioVideo(fixture.projectId);
     const current = detailAfterReload.materials[0]?.current_version;
     expect(current?.version_number).toBe(21);
