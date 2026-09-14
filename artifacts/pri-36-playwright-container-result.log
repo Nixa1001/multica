@@ -12,7 +12,7 @@ Result:
 - real ApiClient pagination/hash/provenance regression: PASS
 - authenticated browser route: FAIL
 - Browser starts in the container (no host libnspr4.so dependency).
-- API detail returned HTTP 200, but the UI rendered youtube-studio.load_failed; the response reported ingestion state processing and the page never exposed version 21.
+- API detail returned HTTP 200, but the UI rendered youtube-studio.load_failed. With the localhost origin on an alternate isolated port, CORS passed; the actual render failure was client schema validation: `current_version` omits `source_result_id`, `source_issue_id`, and `source_task_id`, which the current `StudioVideoDetailSchema` requires. The page therefore never exposed version 21.
 - No genuine completion/worker-to-ready transition was proven; the fixture still inserts completed rows/results directly.
 
 The runner stops its process groups and removes only its named disposable database/browser containers.
