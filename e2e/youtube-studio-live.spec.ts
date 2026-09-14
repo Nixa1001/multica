@@ -1,5 +1,6 @@
 import "./env";
 import { test, expect } from "@playwright/test";
+import { createHash } from "node:crypto";
 import pg from "pg";
 import { ApiClient } from "@multica/core/api";
 import { setCurrentWorkspace } from "@multica/core/platform";
@@ -17,9 +18,10 @@ type Fixture = {
   projectId: string;
   issueId: string;
   artifactId: string;
+  taskIds: string[];
 };
 
-async function seedVersions(fixture: Fixture) {
+async function seedRunningTasks(fixture: Fixture) {
   const db = new pg.Client(databaseUrl);
   await db.connect();
   try {
@@ -42,50 +44,47 @@ async function seedVersions(fixture: Fixture) {
       `SELECT id FROM youtube_issue_binding WHERE project_id = $1 AND issue_id = $2`,
       [fixture.projectId, fixture.issueId],
     );
-    const bindingId = binding.rows[0]?.id;
-    if (!bindingId) throw new Error("bind endpoint did not create a Studio binding");
-    const versions = Array.from({ length: 21 }, (_, index) => ({
-      number: index + 1,
-      markdown: `Studio live version ${index + 1}`,
-      hash: String(index + 1).repeat(64).slice(0, 64),
-    }));
-    for (const version of versions) {
+    if (!binding.rows[0]?.id) throw new Error("bind endpoint did not create a Studio binding");
+    const taskIds: string[] = [];
+    for (let index = 0; index < 21; index += 1) {
       const task = await db.query<{ id: string }>(
         `INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, completed_at)
-         VALUES ($1, $2, $3, 'completed', now()) RETURNING id`,
+         VALUES ($1, $2, $3, 'running', NULL) RETURNING id`,
         [agentId, runtimeId, fixture.issueId],
       );
       const taskId = task.rows[0]?.id;
-      if (!taskId) throw new Error("unable to create isolated completed task fixture");
-      const resultRow = await db.query<{ id: string; event_id: string }>(
-        `INSERT INTO youtube_issue_result
-          (event_id, workspace_id, project_id, binding_id, artifact_id, source_issue_id, source_task_id, markdown, sha256, recorded_at)
-         VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, now()) RETURNING id, event_id`,
-        [fixture.workspace.id, fixture.projectId, bindingId, fixture.artifactId, fixture.issueId, taskId, version.markdown, version.hash],
-      );
-      await db.query(
-        `INSERT INTO youtube_studio_outbox (event_id, workspace_id, result_id, event_kind, payload, consumed_at)
-         VALUES ($1, $2, $3, 'IssueResultRecordedV1', '{}'::jsonb, now())`,
-        [resultRow.rows[0]?.event_id, fixture.workspace.id, resultRow.rows[0]?.id],
-      );
-      await db.query(
-        `INSERT INTO youtube_artifact_version
-          (workspace_id, artifact_id, version_number, source_result_id, source_issue_id, source_task_id, markdown, sha256, recorded_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())`,
-        [fixture.workspace.id, fixture.artifactId, version.number, resultRow.rows[0]?.id, fixture.issueId, taskId, version.markdown, version.hash],
-      );
+      if (!taskId) throw new Error("unable to create isolated running task");
+      taskIds.push(taskId);
     }
-    await db.query(
-      `UPDATE youtube_artifact SET current_version_number = $2 WHERE id = $1`,
-      [fixture.artifactId, versions.length],
-    );
     await db.query("COMMIT");
+    fixture.taskIds = taskIds;
   } catch (error) {
     await db.query("ROLLBACK");
     throw error;
   } finally {
     await db.end();
   }
+}
+
+async function completeTask(fixture: Fixture, taskId: string, markdown: string) {
+  const response = await fetch(`${apiBase}/api/daemon/tasks/${taskId}/complete`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${fixture.api.getToken()}`, "Content-Type": "application/json", "X-Workspace-Slug": fixture.workspace.slug },
+    body: JSON.stringify({ output: markdown }),
+  });
+  if (!response.ok) throw new Error(`authenticated completion failed: ${response.status} ${await response.text()}`);
+}
+
+async function completeVersions(fixture: Fixture) {
+  for (const [index, taskId] of fixture.taskIds.entries()) await completeTask(fixture, taskId, `Studio live version ${index + 1}`);
+  const started = Date.now();
+  while (Date.now() - started < 30000) {
+    const detail = await fixture.client.getYoutubeStudioVideo(fixture.projectId);
+    const material = detail.materials.find((item) => item.artifact_id === fixture.artifactId);
+    if (material?.ingestion.state === "ready" && material.current_version?.version_number === 21) return;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error("Studio worker did not project version 21 to ready within 30s");
 }
 
 async function makeFixture(): Promise<Fixture> {
@@ -103,8 +102,8 @@ async function makeFixture(): Promise<Fixture> {
   const detail = await client.getYoutubeStudioVideo(project.id);
   const artifactId = detail.materials[0]?.artifact_id;
   if (!artifactId) throw new Error("Studio bind returned no artifact");
-  const fixture = { api, client, workspace, projectId: project.id, issueId: issue.id, artifactId };
-  await seedVersions(fixture);
+  const fixture: Fixture = { api, client, workspace, projectId: project.id, issueId: issue.id, artifactId, taskIds: [] };
+  await seedRunningTasks(fixture);
   return fixture;
 }
 
@@ -120,6 +119,7 @@ test.describe("YouTube Studio live harness", () => {
   });
 
   test("real ApiClient follows before_version without overlap", async () => {
+    await completeVersions(fixture);
     const first = await fixture.client.listYoutubeStudioVersions(fixture.projectId, fixture.artifactId);
     const cursor = first.next_before_version;
     expect(first.versions.map((item) => item.version_number)).toEqual(Array.from({ length: 20 }, (_, index) => 21 - index));
@@ -132,7 +132,7 @@ test.describe("YouTube Studio live harness", () => {
       headers: { Authorization: `Bearer ${fixture.api.getToken()}`, "X-Workspace-Slug": fixture.workspace.slug },
     });
     const detail = await detailResponse.json() as { markdown: string; sha256: string; provenance: { source_issue_id: string } };
-    expect(detail).toMatchObject({ markdown: "Studio live version 1", sha256: "1".repeat(64), provenance: { source_issue_id: fixture.issueId } });
+    expect(detail).toMatchObject({ markdown: "Studio live version 1", sha256: createHash("sha256").update("Studio live version 1").digest("hex"), provenance: { source_issue_id: fixture.issueId } });
 
     const regression = await fetch(`${apiBase}/api/youtube-studio/videos/${fixture.projectId}/artifacts/${fixture.artifactId}/versions?limit=1&before=2`, {
       headers: { Authorization: `Bearer ${fixture.api.getToken()}`, "X-Workspace-Slug": fixture.workspace.slug },
@@ -142,9 +142,11 @@ test.describe("YouTube Studio live harness", () => {
   });
 
   test("authenticated web route renders versions and pagination", async ({ page }) => {
+    test.setTimeout(120000);
+    await completeVersions(fixture);
     const browserErrors: string[] = [];
     const apiResponses: string[] = [];
-    page.on("console", (message) => { if (message.type() === "error") browserErrors.push(`console: ${message.text()}`); });
+    page.on("console", (message) => { if (message.type() === "error" || message.type() === "warning") browserErrors.push(`console ${message.type()}: ${message.text()}`); });
     page.on("pageerror", (error) => browserErrors.push(`pageerror: ${error.message}`));
     page.on("response", async (response) => {
       if (response.url().includes("/api/youtube-studio/videos/") && response.request().method() === "GET") {
@@ -159,16 +161,18 @@ test.describe("YouTube Studio live harness", () => {
     await page.goto(`/${fixture.workspace.slug}/youtube-studio/${fixture.projectId}`);
     await page.waitForTimeout(1000);
     if (browserErrors.length > 0) throw new Error(`browser diagnostics: ${browserErrors.join(" | ")}`);
-    try {
-      await expect(page.getByText("Studio live version 21")).toBeVisible({ timeout: 20000 });
-    } catch (error) {
-      throw new Error(`${error instanceof Error ? error.message : String(error)}; url=${page.url()}; body=${(await page.locator("body").innerText()).slice(0, 1000)}; api=${apiResponses.join(" | ")}`);
-    }
-    await expect(page.getByText("Studio live version 1")).toHaveCount(0);
-    await page.getByRole("button", { name: /older versions/i }).click();
-    await expect(page.getByText("Studio live version 1")).toBeVisible({ timeout: 10000 });
-    await expect(page.getByText("Studio live version 21")).toBeVisible();
+    await expect(page.getByText("youtube-studio.state_ready")).toBeVisible({ timeout: 20000 });
+    await expect(page.getByRole("combobox", { name: /youtube-studio.version/i })).toHaveValue(/.+/);
+    await page.getByRole("button", { name: /older_versions/i }).click();
+    await expect(page.getByRole("option", { name: "1" })).toBeVisible({ timeout: 10000 });
     await page.reload();
-    await expect(page.getByText("Studio live version 21")).toBeVisible({ timeout: 20000 });
+    await expect(page.getByText("youtube-studio.state_ready")).toBeVisible({ timeout: 20000 });
+    const detailAfterReload = await fixture.client.getYoutubeStudioVideo(fixture.projectId);
+    const current = detailAfterReload.materials[0]?.current_version;
+    expect(current?.version_number).toBe(21);
+    expect(current?.sha256).toBe(createHash("sha256").update("Studio live version 21").digest("hex"));
+    expect(current?.source_issue_id).toBe(fixture.issueId);
+    expect(current?.source_task_id).toBe(fixture.taskIds[20]);
+    expect(current?.source_result_id).toMatch(/^[0-9a-f-]{36}$/);
   });
 });
