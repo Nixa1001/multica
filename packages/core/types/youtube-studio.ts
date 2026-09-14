@@ -7,5 +7,5 @@ export interface StudioMaterial { binding_id: string; artifact_id: string; kind:
 export interface StudioVideoDetail { video_id: string; name: string; lifecycle_state: string; materials: StudioMaterial[]; }
 export interface StudioVersionsResponse { versions: StudioVersionSummary[]; next_before_version: number | null; }
 export interface StudioProvenance { source_result_id: string; source_issue_id: string; source_task_id: string; producer: { type: string; id: string; name: string } | null; }
-export interface StudioVersion extends StudioVersionSummary { artifact_id: string; content_kind: "markdown"; markdown: string; provenance: StudioProvenance; }
+export interface StudioVersion { id: string; artifact_id: string; version_number: number; content_kind: "markdown"; markdown: string; sha256: string; recorded_at: string; provenance: StudioProvenance; }
 export interface StudioBindingResponse { created: boolean; video_id: string; binding: { id: string; issue_id: string; artifact_id: string; kind: "markdown"; active: boolean; created_at: string; }; }
