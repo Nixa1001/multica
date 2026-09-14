@@ -265,7 +265,10 @@ func TestYouTubeStudioVideoHTTPIngestionStateMatrix(t *testing.T) {
 		Materials []struct {
 			ArtifactID string `json:"artifact_id"`
 			Current    *struct {
-				Version int `json:"version_number"`
+				Version        int    `json:"version_number"`
+				SourceResultID string `json:"source_result_id"`
+				SourceIssueID  string `json:"source_issue_id"`
+				SourceTaskID   string `json:"source_task_id"`
 			} `json:"current_version"`
 			Ingestion struct {
 				State       string `json:"state"`
@@ -293,6 +296,9 @@ func TestYouTubeStudioVideoHTTPIngestionStateMatrix(t *testing.T) {
 				}
 				if key == "retained" && (material.Current == nil || material.Current.Version != 1) {
 					t.Errorf("retained current version=%v want 1", material.Current)
+				}
+				if material.Current != nil && (material.Current.SourceResultID == "" || material.Current.SourceIssueID == "" || material.Current.SourceTaskID == "") {
+					t.Errorf("%s current version lost immutable provenance: %+v", key, material.Current)
 				}
 			}
 		}
