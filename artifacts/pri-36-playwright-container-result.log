@@ -1,6 +1,6 @@
 PRI-36 browser harness run (2026-09-14, sanitized)
 
-Harness SHA: 59c29b8a9cbb4afe0750072fa9011982503b89d2
+Harness SHA: 225545a27619948f0f9b186895248cfd8d77eb64
 Product fix SHA: 5529c08efb0149c66edd92612585019452df2507
 Harness base SHA: 4f21ef0c5aeb9456cc73da8d98cf7b3d0cbdb997
 Browser image: mcr.microsoft.com/playwright:v1.58.2-noble
