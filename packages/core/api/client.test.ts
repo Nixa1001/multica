@@ -14,6 +14,27 @@ afterEach(() => {
 });
 
 describe("YouTube Studio API contract boundary", () => {
+  it("sends the server pagination cursor as before_version", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ versions: [], next_before_version: null }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await new ApiClient("https://api.example.test").listYoutubeStudioVersions(
+      "video/1",
+      "artifact/1",
+      42,
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.example.test/api/youtube-studio/videos/video%2F1/artifacts/artifact%2F1/versions?limit=20&before_version=42",
+      expect.anything(),
+    );
+  });
+
   it("rejects malformed responses and never logs the raw payload", async () => {
     const rawMarkdown = "# private draft";
     const warn = vi.fn();
