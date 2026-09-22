@@ -10,7 +10,7 @@ import {
   type ReactNode,
 } from "react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
-import { Archive, ChevronRight, Inbox } from "lucide-react";
+import { Archive, ChevronDown, ChevronRight, Inbox } from "lucide-react";
 import { isEditableShortcutTarget } from "@multica/core/shortcuts";
 import { isImeComposing } from "@multica/core/utils";
 import type { InboxItem } from "@multica/core/types";
@@ -19,6 +19,7 @@ import { InboxListItem } from "./inbox-list-item";
 import { VirtuosoSeed, VIRTUOSO_SEED_COUNT } from "../../common/virtuoso-seed";
 import { useRestoredScrollOffset, useRestoredScrollRef } from "../../platform";
 import { useT } from "../../i18n";
+import type { InboxProjectGroup } from "./inbox-project-grouping";
 
 // Sizing only (like the board's card estimate): the seed's trailing spacer
 // and Virtuoso's defaultItemHeight share this value so the scroller's height
@@ -59,6 +60,7 @@ export function InboxList({
   onOpenArchived,
   emptyLabel,
   emptyAction,
+  groups,
 }: {
   items: InboxItem[];
   view: InboxView;
@@ -71,6 +73,7 @@ export function InboxList({
   onOpenArchived: () => void;
   emptyLabel?: string;
   emptyAction?: ReactNode;
+  groups?: InboxProjectGroup[];
 }) {
   const { t } = useT("inbox");
   // Virtuoso's `customScrollParent` wants the actual HTMLElement, not a ref.
@@ -92,6 +95,14 @@ export function InboxList({
   );
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const isArchivedView = view === "archived";
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const navigableItems = groups
+    ? groups.flatMap((group) =>
+        collapsedGroups.has(group.id) ? [] : group.items,
+      )
+    : items;
 
   // Keyboard focus for the list lives on the scroll container, not on a row:
   // virtualization unmounts the row the user clicked as soon as it scrolls
@@ -131,7 +142,7 @@ export function InboxList({
     event.preventDefault();
     focusList();
 
-    const current = items.findIndex(
+    const current = navigableItems.findIndex(
       (item) => (item.issue_id ?? item.id) === selectedKey,
     );
     const step = event.key === "ArrowDown" ? 1 : -1;
@@ -140,10 +151,10 @@ export function InboxList({
       current < 0
         ? step === 1
           ? 0
-          : items.length - 1
-        : Math.min(Math.max(current + step, 0), items.length - 1);
+          : navigableItems.length - 1
+        : Math.min(Math.max(current + step, 0), navigableItems.length - 1);
     if (nextIndex === current) return;
-    const nextItem = items[nextIndex];
+    const nextItem = navigableItems[nextIndex];
     if (!nextItem) return;
 
     // Virtuoso's own scrollIntoView, never the DOM element's: the target row
@@ -214,6 +225,56 @@ export function InboxList({
         {/* Still offer the archive when the main list is empty — that is
             exactly when a user goes looking for what they filed away. */}
         <div className="px-2"><Footer /></div>
+      </div>
+    );
+  }
+
+  if (groups) {
+    return (
+      <div className="flex-1 min-h-0 overflow-y-auto outline-none" tabIndex={-1}>
+        <div className="px-2 py-1">
+          {groups.map((group) => {
+            const collapsed = collapsedGroups.has(group.id);
+            return (
+              <section key={group.id} aria-labelledby={`inbox-group-${group.id}`}>
+                <button
+                  type="button"
+                  id={`inbox-group-${group.id}`}
+                  aria-expanded={!collapsed}
+                  onClick={() =>
+                    setCollapsedGroups((current) => {
+                      const next = new Set(current);
+                      if (next.has(group.id)) next.delete(group.id);
+                      else next.add(group.id);
+                      return next;
+                    })
+                  }
+                  className="flex w-full items-center gap-1.5 px-2 pb-1 pt-3 text-left text-caption font-semibold text-muted-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                >
+                  <ChevronDown
+                    className={`size-3.5 transition-transform ${collapsed ? "-rotate-90" : ""}`}
+                  />
+                  <span className="truncate">{group.title}</span>
+                  <span className="ml-auto tabular-nums text-faint-foreground">
+                    {group.items.length}
+                  </span>
+                </button>
+                {!collapsed &&
+                  group.items.map((item) => (
+                    <InboxListItem
+                      key={item.id}
+                      item={item}
+                      view={view}
+                      isSelected={(item.issue_id ?? item.id) === selectedKey}
+                      onClick={() => selectItem(item)}
+                      onAction={() => onAction(item.id)}
+                    />
+                  ))}
+              </section>
+            );
+          })}
+          <Footer />
+        </div>
       </div>
     );
   }

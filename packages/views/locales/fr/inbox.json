@@ -4,6 +4,7 @@
     "back": "Boîte de réception"
   },
   "menu": {
+    "group_by_project": "Grouper par projet",
     "mark_all_read": "Tout marquer comme lu",
     "archive_all": "Tout archiver",
     "archive_all_read": "Archiver tout ce qui est lu",
@@ -30,6 +31,8 @@
     "open_in_new_tab": "Ouvrir dans un nouvel onglet"
   },
   "list": {
+    "without_project": "Sans projet",
+    "unknown_project": "Projet inconnu",
     "loading_selection": "Chargement de la notification…",
     "empty": "Aucune notification",
     "mark_done_tooltip": "Marquer comme traité",
