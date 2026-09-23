@@ -191,6 +191,26 @@ export const issueKeys = {
     ["source-context", "preview", wsId, anchorCommentId] as const,
 };
 
+/** Fetch the linked issues for an inbox page in bounded batched requests. */
+export function issueListByIdsOptions(wsId: string, ids: readonly string[]) {
+  const normalizedIds = [...new Set(ids)].sort();
+  return queryOptions({
+    queryKey: [...issueKeys.all(wsId), "by-ids", normalizedIds] as const,
+    queryFn: async () => {
+      const pages = await Promise.all(
+        Array.from({ length: Math.ceil(normalizedIds.length / 100) }, (_, index) =>
+          api.listIssues({
+            ids: normalizedIds.slice(index * 100, index * 100 + 100),
+            limit: 100,
+          }),
+        ),
+      );
+      return pages.flatMap((page) => page.issues);
+    },
+    enabled: normalizedIds.length > 0,
+  });
+}
+
 export function sourceContextPreviewOptions(
   wsId: string,
   anchorCommentId: string | null | undefined,

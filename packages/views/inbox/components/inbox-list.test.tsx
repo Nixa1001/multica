@@ -232,3 +232,38 @@ describe("InboxList archive pagination", () => {
     expect(screen.queryByText("No archived notifications")).toBeNull();
   });
 });
+
+describe("InboxList project groups", () => {
+  it("collapses and reopens a project group while preserving row actions", () => {
+    const onSelect = vi.fn();
+    const groups = [
+      { id: "project-a", title: "Project Alpha", items: [items[0]!] },
+      { id: "__no_project__", title: "Without project", items: [items[1]!, items[2]!] },
+    ];
+
+    render(
+      <InboxList
+        items={items}
+        groups={groups}
+        view="inbox"
+        selectedKey=""
+        onSelect={onSelect}
+        onAction={vi.fn()}
+        onOpenArchived={vi.fn()}
+      />,
+    );
+
+    const heading = screen.getByRole("button", { name: /Project Alpha/ });
+    expect(heading).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("a")).toBeTruthy();
+
+    fireEvent.click(heading);
+    expect(heading).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("a")).toBeNull();
+
+    fireEvent.click(heading);
+    expect(heading).toHaveAttribute("aria-expanded", "true");
+    fireEvent.click(screen.getByText("a"));
+    expect(onSelect).toHaveBeenCalledWith(items[0]);
+  });
+});
