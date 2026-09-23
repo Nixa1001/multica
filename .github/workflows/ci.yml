@@ -896,6 +896,9 @@ jobs:
       - name: Test build output naming
         run: bash scripts/makefile-build.test.sh
 
+      - name: Test self-host deployment safety contract
+        run: bash scripts/deploy-selfhost.test.sh
+
   frontend-quality:
     needs: changes
     if: ${{ needs.changes.outputs.quality_only == 'true' }}

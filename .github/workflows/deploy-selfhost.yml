@@ -1,0 +1,48 @@
+name: Deploy self-hosted installation
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# This workflow is intentionally inert until an owner sets the repository
+# variable MULTICA_SELFHOST_DEPLOY_ENABLED=true and registers the local host
+# with the `multica-selfhost` self-hosted runner label.
+permissions:
+  contents: read
+
+concurrency:
+  group: multica-selfhost-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: ${{ vars.MULTICA_SELFHOST_DEPLOY_ENABLED == 'true' && github.ref == 'refs/heads/main' }}
+    runs-on: [self-hosted, linux, multica-selfhost]
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact merge commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          # Preserve the installation's .env and local deployment state. The
+          # runner workspace is the existing Compose project directory.
+          clean: false
+
+      - name: Verify required deployment tools
+        run: |
+          docker version
+          docker compose version
+          curl --version
+
+      - name: Deploy immutable commit locally
+        env:
+          DEPLOY_COMMIT: ${{ github.sha }}
+        run: bash scripts/deploy-selfhost.sh deploy "$DEPLOY_COMMIT"
+
+      - name: Show deployed revision
+        if: always()
+        run: |
+          test ! -e .multica-deploy/current || cat .multica-deploy/current
+          docker compose -f docker-compose.selfhost.yml -f docker-compose.selfhost.build.yml ps
